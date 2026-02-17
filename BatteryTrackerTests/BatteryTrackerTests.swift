@@ -1,0 +1,19 @@
+//
+//  BatteryTrackerTests.swift
+//  BatteryTrackerTests
+//
+//  Created by Dominic Docimo on 2/17/26.
+//
+
+import Testing
+@testable import BatteryTracker
+
+struct BatteryTrackerTests {
+
+    @Test func example() async throws {
+        // Write your test here and use APIs like `#expect(...)` to check expected conditions.
+        // Swift Testing Documentation
+        // https://developer.apple.com/documentation/testing
+    }
+
+}
