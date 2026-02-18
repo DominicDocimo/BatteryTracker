@@ -7,7 +7,30 @@
 		<key>BatteryTracker.xcscheme_^#shared#^_</key>
 		<dict>
 			<key>orderHint</key>
+			<integer>1</integer>
+		</dict>
+		<key>Copy of BatteryTracker.xcscheme</key>
+		<dict>
+			<key>orderHint</key>
 			<integer>0</integer>
+		</dict>
+	</dict>
+	<key>SuppressBuildableAutocreation</key>
+	<dict>
+		<key>B6E0761D2F44F92A003B40CC</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>B6E0762A2F44F92B003B40CC</key>
+		<dict>
+			<key>primary</key>
+			<true/>
+		</dict>
+		<key>B6E076342F44F92B003B40CC</key>
+		<dict>
+			<key>primary</key>
+			<true/>
 		</dict>
 	</dict>
 </dict>
