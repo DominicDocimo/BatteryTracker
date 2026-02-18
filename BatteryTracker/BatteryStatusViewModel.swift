@@ -160,8 +160,8 @@ final class BatteryStatusViewModel {
 
     func updateMahToNextCycle() {
         guard let currentCapacityMah,
-              let maxCapacityMah,
-              maxCapacityMah > 0 else {
+              let designCapacityMah,
+              designCapacityMah > 0 else {
             mahToNextCycle = nil
             return
         }
@@ -188,7 +188,7 @@ final class BatteryStatusViewModel {
         }
         defaults.set(discharged, forKey: DefaultsKeys.dischargedSinceLastCycleMah)
 
-        let remaining = max(0.0, Double(maxCapacityMah) - discharged)
+        let remaining = max(0.0, Double(designCapacityMah) - discharged)
         mahToNextCycle = Int(ceil(remaining))
     }
     private func updateTimeRemaining() {
