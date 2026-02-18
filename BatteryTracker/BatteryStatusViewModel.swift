@@ -24,7 +24,8 @@ final class BatteryStatusViewModel {
     var cyclesToday: Int?
     var cyclesPerDayNeeded: Double?
     var mahToNextCycle: Int?
-    var timeRemainingText: String = "—"
+    var timeRemainingText: String = "Time to Full/Empty: —"
+    var timeToNextCycleText: String = "Time Until Next Cycle: —"
     var storeLocationMessage: String?
 
     private enum DefaultsKeys {
@@ -67,6 +68,7 @@ final class BatteryStatusViewModel {
         updateCyclesPerDayNeeded()
         updateMahToNextCycle()
         updateTimeRemaining()
+        updateTimeToNextCycle(modelContext: modelContext, todayDate: todayDate)
         updateDailyStats(modelContext: modelContext, todayDate: todayDate)
     }
 
@@ -193,7 +195,12 @@ final class BatteryStatusViewModel {
     }
     private func updateTimeRemaining() {
         guard let remaining = getBatteryTimeRemaining() else {
-            timeRemainingText = "—"
+            timeRemainingText = "Time to Full/Empty: —"
+            return
+        }
+
+        guard remaining.minutes > 0 else {
+            timeRemainingText = "Time to Full/Empty: —"
             return
         }
 
@@ -204,6 +211,48 @@ final class BatteryStatusViewModel {
         timeRemainingText = remaining.isCharging
             ? "Time to Full: \(formatted)"
             : "Time to Empty: \(formatted)"
+    }
+
+    private func updateTimeToNextCycle(modelContext: ModelContext, todayDate: Date) {
+        guard let mahToNextCycle,
+              mahToNextCycle > 0 else {
+            timeToNextCycleText = "Time Until Next Cycle: —"
+            return
+        }
+
+        if let today = fetchDailyCycle(for: todayDate, modelContext: modelContext),
+           today.timeOnBattery > 0,
+           today.totalMahUsed > 0 {
+            let mahPerSecond = today.totalMahUsed / today.timeOnBattery
+            if mahPerSecond > 0 {
+                let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
+                timeToNextCycleText = "Time Until Next Cycle: \(formatDuration(secondsRemaining))"
+                return
+            }
+        }
+
+        if let remaining = getBatteryTimeRemaining(),
+           remaining.isCharging == false,
+           let currentCapacityMah,
+           remaining.minutes > 0,
+           currentCapacityMah > 0 {
+            let secondsToEmpty = Double(remaining.minutes * 60)
+            let mahPerSecond = Double(currentCapacityMah) / secondsToEmpty
+            if mahPerSecond > 0 {
+                let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
+                timeToNextCycleText = "Time Until Next Cycle: \(formatDuration(secondsRemaining))"
+                return
+            }
+        }
+
+        timeToNextCycleText = "Time Until Next Cycle: —"
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: seconds) ?? "—"
     }
 
     func updateDailyStats(modelContext: ModelContext, todayDate: Date) {
