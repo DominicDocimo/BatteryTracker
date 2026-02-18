@@ -24,9 +24,10 @@ struct ContentView: View {
         VStack(alignment: .leading, spacing: 8) {
             if let cycleCount = viewModel.cycleCount,
                let mahToNextCycle = viewModel.mahToNextCycle,
-               let maxCapacityMah = viewModel.maxCapacityMah,
-               maxCapacityMah > 0 {
-                let percentComplete = (1.0 - (Double(mahToNextCycle) / Double(maxCapacityMah))) * 100
+               let designCapacityMah = viewModel.designCapacityMah,
+               designCapacityMah > 0 {
+                let rawPercent = (1.0 - (Double(mahToNextCycle) / Double(designCapacityMah))) * 100
+                let percentComplete = min(100, max(0, rawPercent))
                 let progressPercent = (Double(cycleCount) / 1000.0) * 100.0
                 Text("Cycles: \(cycleCount) (\(String(format: "%.2f", progressPercent))%)")
                     .font(.headline)
@@ -81,10 +82,16 @@ struct ContentView: View {
                     .font(.subheadline)
             }
 
+            Text(viewModel.timeToNextCycleText)
+                .font(.subheadline)
+
             Divider()
 
             Button("History") {
                 showHistoryWindow()
+            }
+            Button("Open in Finder") {
+                revealAppInFinder()
             }
 /*
             Button("Show Store Location") {
@@ -140,6 +147,10 @@ struct ContentView: View {
                 }
             }
         }
+    }
+
+    private func revealAppInFinder() {
+        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
     }
 }
 
