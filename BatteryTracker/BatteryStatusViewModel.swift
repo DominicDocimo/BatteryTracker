@@ -27,6 +27,8 @@ final class BatteryStatusViewModel {
     var timeRemainingText: String = "Time to Full/Empty: —"
     var timeToNextCycleText: String = "Time Until Next Cycle: —"
     var storeLocationMessage: String?
+    var currentPowerSourceState: PowerSourceState = .unknown
+    var totalMahUsedToday: Double?
 
     private enum DefaultsKeys {
         static let cyclesBaselineDate = "cyclesBaselineDate"
@@ -39,6 +41,7 @@ final class BatteryStatusViewModel {
         static let lastSampleDateKey = "lastSampleDateKey"
         static let lastSampleTimestamp = "lastSampleTimestamp"
         static let lastPowerSourceState = "lastPowerSourceState"
+        static let todayMahUsed = "todayMahUsed"
     }
 
     private static let dayFormatter: DateFormatter = {
@@ -50,6 +53,7 @@ final class BatteryStatusViewModel {
     }()
 
     func updateBatteryInfo(modelContext: ModelContext) {
+        currentPowerSourceState = getPowerSourceState()
         cycleCount = getBatteryCycleCount()
         rawBatteryHealthPercent = getBatteryHealthText() ?? "Unknown"
         officialBatteryHealthText = getOfficialBatteryHealthText() ?? "Unknown"
@@ -270,6 +274,8 @@ final class BatteryStatusViewModel {
             if let currentCapacityMah {
                 defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForUsage)
             }
+            defaults.set(0.0, forKey: DefaultsKeys.todayMahUsed)
+            totalMahUsedToday = 0
             defaults.set(todayKey, forKey: DefaultsKeys.lastSampleDateKey)
             defaults.set(now.timeIntervalSince1970, forKey: DefaultsKeys.lastSampleTimestamp)
             defaults.set(currentPowerState.rawValue, forKey: DefaultsKeys.lastPowerSourceState)
@@ -287,7 +293,12 @@ final class BatteryStatusViewModel {
         }
 
         let existing = fetchDailyCycle(for: todayDate, modelContext: modelContext)
+        let cachedMahUsed = defaults.double(forKey: DefaultsKeys.todayMahUsed)
+        if cachedMahUsed == 0, let existing, existing.totalMahUsed > 0 {
+            defaults.set(existing.totalMahUsed, forKey: DefaultsKeys.todayMahUsed)
+        }
         let totalMahUsed = updateMahUsed(existing: existing)
+        totalMahUsedToday = totalMahUsed
         let timeOnBattery = (existing?.timeOnBattery ?? 0) + (effectiveState == .battery ? elapsed : 0)
         let timePluggedIn = (existing?.timePluggedIn ?? 0) + (effectiveState == .ac ? elapsed : 0)
         let rawCycles = calculateRawCycles(totalMahUsed: totalMahUsed)
@@ -306,16 +317,41 @@ final class BatteryStatusViewModel {
         defaults.set(todayKey, forKey: DefaultsKeys.lastSampleDateKey)
         defaults.set(now.timeIntervalSince1970, forKey: DefaultsKeys.lastSampleTimestamp)
         defaults.set(currentPowerState.rawValue, forKey: DefaultsKeys.lastPowerSourceState)
+        try? modelContext.save()
+    }
+
+    func incrementTodayCycle(modelContext: ModelContext) {
+        let todayDate = Calendar.current.startOfDay(for: Date())
+        let existing = fetchDailyCycle(for: todayDate, modelContext: modelContext)
+        let currentCycles = existing?.cycles ?? cyclesToday ?? 0
+        let newCycles = currentCycles + 1
+
+        upsertDailyCycle(
+            for: todayDate,
+            modelContext: modelContext,
+            existing: existing
+        ) { daily in
+            daily.cycles = newCycles
+        }
+
+        if let cycleCount {
+            let adjustedBaseline = max(0, cycleCount - newCycles)
+            UserDefaults.standard.set(adjustedBaseline, forKey: DefaultsKeys.cyclesBaselineCount)
+            UserDefaults.standard.set(Self.dayFormatter.string(from: Date()), forKey: DefaultsKeys.cyclesBaselineDate)
+        }
+
+        cyclesToday = newCycles
+        try? modelContext.save()
     }
 
     private func updateMahUsed(existing: DailyCycle?) -> Double {
         guard let currentCapacityMah else {
-            return existing?.totalMahUsed ?? 0
+            return UserDefaults.standard.double(forKey: DefaultsKeys.todayMahUsed)
         }
 
         let defaults = UserDefaults.standard
         let lastCapacity = defaults.object(forKey: DefaultsKeys.lastCapacityMahForUsage) as? Int
-        let previousTotal = existing?.totalMahUsed ?? 0
+        let previousTotal = defaults.double(forKey: DefaultsKeys.todayMahUsed)
 
         defer {
             defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForUsage)
@@ -326,7 +362,9 @@ final class BatteryStatusViewModel {
         }
 
         let delta = Double(lastCapacity - currentCapacityMah)
-        return previousTotal + max(0, delta)
+        let updatedTotal = previousTotal + max(0, delta)
+        defaults.set(updatedTotal, forKey: DefaultsKeys.todayMahUsed)
+        return updatedTotal
     }
 
     private func calculateRawCycles(totalMahUsed: Double) -> Double {
@@ -338,7 +376,9 @@ final class BatteryStatusViewModel {
     }
 
     func revealStoreLocation(modelContext: ModelContext) {
-        guard let url = modelContext.container.configurations.first?.url else {
+        let configuredURL = modelContext.container.configurations.first?.url
+        let url = (configuredURL?.path == "/dev/null") ? persistentStoreURLFallback() : configuredURL
+        guard let url else {
             storeLocationMessage = "No on-disk store URL available."
             return
         }
@@ -348,6 +388,18 @@ final class BatteryStatusViewModel {
         NSPasteboard.general.setString(path, forType: .string)
         NSWorkspace.shared.activateFileViewerSelecting([url])
         storeLocationMessage = "Path copied to clipboard:\n\(path)"
+    }
+
+    private func persistentStoreURLFallback() -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        let directory = supportDirectory.appendingPathComponent("BatteryTracker", isDirectory: true)
+        return directory.appendingPathComponent("BatteryTracker.store")
     }
 
     func formatDecimal(_ value: Double) -> String {
