@@ -368,11 +368,11 @@ final class BatteryStatusViewModel {
     }
 
     private func calculateRawCycles(totalMahUsed: Double) -> Double {
-        guard let maxCapacityMah, maxCapacityMah > 0 else {
+        guard let designCapacityMah, designCapacityMah > 0 else {
             return 0
         }
 
-        return totalMahUsed / Double(maxCapacityMah)
+        return totalMahUsed / Double(designCapacityMah)
     }
 
     func revealStoreLocation(modelContext: ModelContext) {
