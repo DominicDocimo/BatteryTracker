@@ -17,9 +17,13 @@ private let appDelegate = AppDelegate.shared
 
 struct ContentView: View {
     @State private var viewModel = BatteryStatusViewModel()
+    @State private var usesClockwiseProgression = true
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
     private let ringLineWidth: CGFloat = 6
+    private let showsAddCycleTodayButton = false
+    private let showsOpenInFinderButton = false
+    private let showsOpenPathToDatabaseButton = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -45,7 +49,8 @@ struct ContentView: View {
                         ],
                         progress: min(1, max(0, progressPercent / 100.0)),
                         accent: progressColor(for: progressPercent),
-                        lineWidth: ringLineWidth
+                        lineWidth: ringLineWidth,
+                        usesClockwiseProgression: usesClockwiseProgression
                     )
                     ProgressRingView(
                         title: "Cycle",
@@ -54,7 +59,8 @@ struct ContentView: View {
                         detailLines: cycleCompletionDetailLines(),
                         progress: percentComplete / 100.0,
                         accent: progressColor(for: percentComplete),
-                        lineWidth: ringLineWidth
+                        lineWidth: ringLineWidth,
+                        usesClockwiseProgression: usesClockwiseProgression
                     )
                     ProgressRingView(
                         title: "Cycles",
@@ -63,7 +69,8 @@ struct ContentView: View {
                         detailLines: cyclesTodayDetailLines(baseText: cyclesTodayDetail),
                         progress: max(0, (cyclesTodayPercent ?? 0) / 100.0),
                         accent: progressColor(for: cyclesTodayPercent ?? 0),
-                        lineWidth: ringLineWidth
+                        lineWidth: ringLineWidth,
+                        usesClockwiseProgression: usesClockwiseProgression
                     )
                 }
                 .frame(maxWidth: .infinity)
@@ -112,14 +119,23 @@ struct ContentView: View {
             Button("History") {
                 showHistoryWindow()
             }
-            Button("Add Cycle Today") {
-                viewModel.incrementTodayCycle(modelContext: modelContext)
+            Button(usesClockwiseProgression ? "Use Counterclockwise Progression" : "Use Clockwise Progression") {
+                usesClockwiseProgression.toggle()
             }
-            Button("Open in Finder") {
-                revealAppInFinder()
+            if showsAddCycleTodayButton {
+                Button("Add Cycle Today") {
+                    viewModel.incrementTodayCycle(modelContext: modelContext)
+                }
             }
-            Button("Open Path to Database") {
-                viewModel.revealStoreLocation(modelContext: modelContext)
+            if showsOpenInFinderButton {
+                Button("Open in Finder") {
+                    revealAppInFinder()
+                }
+            }
+            if showsOpenPathToDatabaseButton {
+                Button("Open Path to Database") {
+                    viewModel.revealStoreLocation(modelContext: modelContext)
+                }
             }
 /*
             Button("Show Store Location") {
@@ -299,6 +315,7 @@ private struct ProgressRingView: View {
     let progress: Double
     let accent: Color
     let lineWidth: CGFloat
+    let usesClockwiseProgression: Bool
 
     var body: some View {
         VStack(spacing: 4) {
@@ -326,7 +343,7 @@ private struct ProgressRingView: View {
                         style: StrokeStyle(lineWidth: lineWidth, lineCap: .round)
                     )
                     .rotationEffect(.degrees(-90))
-                    .scaleEffect(x: -1, y: 1, anchor: .center)
+                    .scaleEffect(x: usesClockwiseProgression ? 1 : -1, y: 1, anchor: .center)
                 Text(valueText)
                     .font(.headline)
                     .foregroundStyle(accent)
