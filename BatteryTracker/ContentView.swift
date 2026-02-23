@@ -104,6 +104,8 @@ struct ContentView: View {
                 .bold()
             Text(viewModel.timeRemainingText)
                 .font(.subheadline)
+            Text(viewModel.timeToTenMinutesRemainingText)
+                .font(.subheadline)
             if let mahToNextCycle = viewModel.mahToNextCycle {
                 Text("mAh to Next Cycle: \(mahToNextCycle)")
                     .font(.subheadline)

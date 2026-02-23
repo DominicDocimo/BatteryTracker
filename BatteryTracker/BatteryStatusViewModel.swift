@@ -25,10 +25,12 @@ final class BatteryStatusViewModel {
     var cyclesPerDayNeeded: Double?
     var mahToNextCycle: Int?
     var timeRemainingText: String = "Time to Full/Empty: —"
+    var timeToTenMinutesRemainingText: String = "Time to 10 Minutes Remaining: —"
     var timeToNextCycleText: String = "Time Until Next Cycle: —"
     var storeLocationMessage: String?
     var currentPowerSourceState: PowerSourceState = .unknown
     var totalMahUsedToday: Double?
+    private var lastTimeToNextCycleValue: String?
 
     private enum DefaultsKeys {
         static let cyclesBaselineDate = "cyclesBaselineDate"
@@ -200,11 +202,13 @@ final class BatteryStatusViewModel {
     private func updateTimeRemaining() {
         guard let remaining = getBatteryTimeRemaining() else {
             timeRemainingText = "Time to Full/Empty: —"
+            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
             return
         }
 
         guard remaining.minutes > 0 else {
             timeRemainingText = "Time to Full/Empty: —"
+            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
             return
         }
 
@@ -212,15 +216,39 @@ final class BatteryStatusViewModel {
         formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .abbreviated
         let formatted = formatter.string(from: TimeInterval(remaining.minutes * 60)) ?? "—"
-        timeRemainingText = remaining.isCharging
-            ? "Time to Full: \(formatted)"
-            : "Time to Empty: \(formatted)"
+        if remaining.isCharging {
+            timeRemainingText = "Time to Full: \(formatted)"
+            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+            return
+        }
+
+        timeRemainingText = "Time to Empty: \(formatted)"
+        let minutesToTen = remaining.minutes - 10
+        if minutesToTen > 0 {
+            let timeToTen = formatter.string(from: TimeInterval(minutesToTen * 60)) ?? "—"
+            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: \(timeToTen)"
+        } else {
+            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+        }
     }
 
     private func updateTimeToNextCycle(modelContext: ModelContext, todayDate: Date) {
+        let isPaused = currentPowerSourceState == .ac
+        if isPaused, let lastTimeToNextCycleValue {
+            timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Paused)"
+            return
+        } else if isPaused {
+            timeToNextCycleText = "Time Until Next Cycle: —"
+            return
+        }
+
         guard let mahToNextCycle,
               mahToNextCycle > 0 else {
-            timeToNextCycleText = "Time Until Next Cycle: —"
+            if let lastTimeToNextCycleValue {
+                timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Unpaused - Calculating)"
+            } else {
+                timeToNextCycleText = "Time Until Next Cycle: —"
+            }
             return
         }
 
@@ -230,7 +258,9 @@ final class BatteryStatusViewModel {
             let mahPerSecond = today.totalMahUsed / today.timeOnBattery
             if mahPerSecond > 0 {
                 let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
-                timeToNextCycleText = "Time Until Next Cycle: \(formatDuration(secondsRemaining))"
+                let formatted = formatDuration(secondsRemaining)
+                lastTimeToNextCycleValue = formatted
+                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
                 return
             }
         }
@@ -244,12 +274,18 @@ final class BatteryStatusViewModel {
             let mahPerSecond = Double(currentCapacityMah) / secondsToEmpty
             if mahPerSecond > 0 {
                 let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
-                timeToNextCycleText = "Time Until Next Cycle: \(formatDuration(secondsRemaining))"
+                let formatted = formatDuration(secondsRemaining)
+                lastTimeToNextCycleValue = formatted
+                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
                 return
             }
         }
 
-        timeToNextCycleText = "Time Until Next Cycle: —"
+        if let lastTimeToNextCycleValue {
+            timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Unpaused - Calculating)"
+        } else {
+            timeToNextCycleText = "Time Until Next Cycle: —"
+        }
     }
 
     private func formatDuration(_ seconds: Double) -> String {
