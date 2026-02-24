@@ -121,9 +121,38 @@ private struct DailyStatsDetailView: View {
             StatRow(label: "Time on Battery", value: formatDuration(entry.timeOnBattery))
             StatRow(label: "Time Plugged In", value: formatDuration(entry.timePluggedIn))
 
+            DisclosureGroup("Cycle Breakdown") {
+                if entry.cycleBreakdowns.isEmpty {
+                    Text("No cycle breakdown yet.")
+                        .font(.subheadline)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(cycleBreakdowns) { breakdown in
+                        HStack {
+                            Text(cycleBreakdownLabel(for: breakdown))
+                            Spacer()
+                            Text("\(formatDecimal(breakdown.mahUsed)) mAh")
+                                .monospacedDigit()
+                        }
+                        .font(.subheadline)
+                    }
+                }
+            }
+
             Spacer()
         }
         .padding()
+    }
+
+    private var cycleBreakdowns: [CycleBreakdown] {
+        entry.cycleBreakdowns.sorted { $0.index < $1.index }
+    }
+
+    private func cycleBreakdownLabel(for breakdown: CycleBreakdown) -> String {
+        if breakdown.isPartial {
+            return "Cycle \(breakdown.index) (Partial - \(formatPercent(breakdown.completionPercent)))"
+        }
+        return "Cycle \(breakdown.index)"
     }
 
     private func formatDate(_ date: Date) -> String {
@@ -136,6 +165,10 @@ private struct DailyStatsDetailView: View {
 
     private func formatDecimal(_ value: Double) -> String {
         String(format: "%.2f", value)
+    }
+
+    private func formatPercent(_ value: Double) -> String {
+        String(format: "%.2f%%", value)
     }
 
     private func formatDuration(_ seconds: Double) -> String {
