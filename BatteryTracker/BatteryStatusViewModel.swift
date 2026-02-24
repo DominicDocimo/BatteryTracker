@@ -24,8 +24,13 @@ final class BatteryStatusViewModel {
     var cyclesToday: Int?
     var cyclesPerDayNeeded: Double?
     var mahToNextCycle: Int?
-    var timeRemainingText: String = "—"
+    var timeRemainingText: String = "Time to Full/Empty: —"
+    var timeToTenMinutesRemainingText: String = "Time to 10% Left: —"
+    var timeToNextCycleText: String = "Time Until Next Cycle: —"
     var storeLocationMessage: String?
+    var currentPowerSourceState: PowerSourceState = .unknown
+    var totalMahUsedToday: Double?
+    private var lastTimeToNextCycleValue: String?
 
     private enum DefaultsKeys {
         static let cyclesBaselineDate = "cyclesBaselineDate"
@@ -35,9 +40,13 @@ final class BatteryStatusViewModel {
         static let lastCapacityMahForCycle = "lastCapacityMahForCycle"
         static let lastCycleCount = "lastCycleCount"
         static let dischargedSinceLastCycleMah = "dischargedSinceLastCycleMah"
+        static let cycleMahUsedDayKey = "cycleMahUsedDayKey"
+        static let cycleMahUsedToday = "cycleMahUsedToday"
+        static let cycleStartedPreviousDay = "cycleStartedPreviousDay"
         static let lastSampleDateKey = "lastSampleDateKey"
         static let lastSampleTimestamp = "lastSampleTimestamp"
         static let lastPowerSourceState = "lastPowerSourceState"
+        static let todayMahUsed = "todayMahUsed"
     }
 
     private static let dayFormatter: DateFormatter = {
@@ -49,6 +58,7 @@ final class BatteryStatusViewModel {
     }()
 
     func updateBatteryInfo(modelContext: ModelContext) {
+        currentPowerSourceState = getPowerSourceState()
         cycleCount = getBatteryCycleCount()
         rawBatteryHealthPercent = getBatteryHealthText() ?? "Unknown"
         officialBatteryHealthText = getOfficialBatteryHealthText() ?? "Unknown"
@@ -65,8 +75,9 @@ final class BatteryStatusViewModel {
         let todayDate = Calendar.current.startOfDay(for: Date())
         updateCyclesToday(modelContext: modelContext, todayDate: todayDate)
         updateCyclesPerDayNeeded()
-        updateMahToNextCycle()
+        updateMahToNextCycle(modelContext: modelContext, todayDate: todayDate)
         updateTimeRemaining()
+        updateTimeToNextCycle(modelContext: modelContext, todayDate: todayDate)
         updateDailyStats(modelContext: modelContext, todayDate: todayDate)
     }
 
@@ -158,15 +169,38 @@ final class BatteryStatusViewModel {
         cyclesPerDayNeeded = Double(remainingCycles) / Double(daysRemaining)
     }
 
-    func updateMahToNextCycle() {
+    func updateMahToNextCycle(modelContext: ModelContext, todayDate: Date) {
         guard let currentCapacityMah,
-              let maxCapacityMah,
-              maxCapacityMah > 0 else {
+              let designCapacityMah,
+              designCapacityMah > 0 else {
             mahToNextCycle = nil
             return
         }
 
         let defaults = UserDefaults.standard
+        let todayKey = Self.dayFormatter.string(from: Date())
+        let storedDayKey = defaults.string(forKey: DefaultsKeys.cycleMahUsedDayKey)
+        var cycleMahUsedToday = defaults.double(forKey: DefaultsKeys.cycleMahUsedToday)
+        var cycleStartedPreviousDay = defaults.bool(forKey: DefaultsKeys.cycleStartedPreviousDay)
+
+        if storedDayKey != todayKey {
+            if let storedDayKey,
+               let previousDate = Self.dayFormatter.date(from: storedDayKey),
+               cycleMahUsedToday > 0 {
+                appendCycleBreakdown(
+                    for: previousDate,
+                    modelContext: modelContext,
+                    mahUsed: cycleMahUsedToday,
+                    designCapacityMah: designCapacityMah,
+                    isPartial: true
+                )
+                cycleStartedPreviousDay = true
+            }
+
+            cycleMahUsedToday = 0
+            defaults.set(todayKey, forKey: DefaultsKeys.cycleMahUsedDayKey)
+        }
+
         let lastCapacity = defaults.object(forKey: DefaultsKeys.lastCapacityMahForCycle) as? Int
         let lastCycle = defaults.object(forKey: DefaultsKeys.lastCycleCount) as? Int
         var discharged = defaults.double(forKey: DefaultsKeys.dischargedSinceLastCycleMah)
@@ -176,10 +210,23 @@ final class BatteryStatusViewModel {
         } ?? false
 
         if didIncrementCycle {
+            if cycleMahUsedToday > 0 {
+                appendCycleBreakdown(
+                    for: todayDate,
+                    modelContext: modelContext,
+                    mahUsed: cycleMahUsedToday,
+                    designCapacityMah: designCapacityMah,
+                    isPartial: cycleStartedPreviousDay
+                )
+            }
+            cycleMahUsedToday = 0
+            cycleStartedPreviousDay = false
             discharged = 0
             defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForCycle)
         } else if let lastCapacity, currentCapacityMah < lastCapacity {
-            discharged += Double(lastCapacity - currentCapacityMah)
+            let delta = Double(lastCapacity - currentCapacityMah)
+            discharged += delta
+            cycleMahUsedToday += delta
         }
 
         defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForCycle)
@@ -187,13 +234,61 @@ final class BatteryStatusViewModel {
             defaults.set(cycleCount, forKey: DefaultsKeys.lastCycleCount)
         }
         defaults.set(discharged, forKey: DefaultsKeys.dischargedSinceLastCycleMah)
+        defaults.set(cycleMahUsedToday, forKey: DefaultsKeys.cycleMahUsedToday)
+        defaults.set(cycleStartedPreviousDay, forKey: DefaultsKeys.cycleStartedPreviousDay)
 
-        let remaining = max(0.0, Double(maxCapacityMah) - discharged)
+        let remaining = max(0.0, Double(designCapacityMah) - discharged)
         mahToNextCycle = Int(ceil(remaining))
+    }
+
+    private func appendCycleBreakdown(
+        for date: Date,
+        modelContext: ModelContext,
+        mahUsed: Double,
+        designCapacityMah: Int,
+        isPartial: Bool
+    ) {
+        guard mahUsed > 0 else {
+            return
+        }
+
+        let targetDate = Calendar.current.startOfDay(for: date)
+        let completionPercent = min(100.0, max(0.0, (mahUsed / Double(designCapacityMah)) * 100.0))
+        let breakdown = CycleBreakdown(
+            index: nextCycleIndex(for: targetDate, modelContext: modelContext),
+            mahUsed: mahUsed,
+            isPartial: isPartial,
+            completionPercent: completionPercent
+        )
+
+        if let existing = fetchDailyCycle(for: targetDate, modelContext: modelContext) {
+            existing.cycleBreakdowns.append(breakdown)
+        } else {
+            let daily = DailyCycle(date: targetDate, cycles: 0)
+            daily.cycleBreakdowns = [breakdown]
+            modelContext.insert(daily)
+        }
+
+        try? modelContext.save()
+    }
+
+    private func nextCycleIndex(for date: Date, modelContext: ModelContext) -> Int {
+        guard let existing = fetchDailyCycle(for: date, modelContext: modelContext) else {
+            return 1
+        }
+        let maxIndex = existing.cycleBreakdowns.map(\.index).max() ?? 0
+        return maxIndex + 1
     }
     private func updateTimeRemaining() {
         guard let remaining = getBatteryTimeRemaining() else {
-            timeRemainingText = "—"
+            timeRemainingText = "Time to Full/Empty: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
+            return
+        }
+
+        guard remaining.minutes > 0 else {
+            timeRemainingText = "Time to Full/Empty: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
             return
         }
 
@@ -201,9 +296,93 @@ final class BatteryStatusViewModel {
         formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .abbreviated
         let formatted = formatter.string(from: TimeInterval(remaining.minutes * 60)) ?? "—"
-        timeRemainingText = remaining.isCharging
-            ? "Time to Full: \(formatted)"
-            : "Time to Empty: \(formatted)"
+        if remaining.isCharging {
+            timeRemainingText = "Time to Full: \(formatted)"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
+            return
+        }
+
+        timeRemainingText = "Time to Empty: \(formatted)"
+        guard let currentCapacityMah,
+              let maxCapacityMah,
+              currentCapacityMah > 0,
+              maxCapacityMah > 0 else {
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
+            return
+        }
+
+        let targetMah = Double(maxCapacityMah) * 0.10
+        let remainingToTen = Double(currentCapacityMah) - targetMah
+        if remainingToTen > 0 {
+            let minutesToTen = (remainingToTen / Double(currentCapacityMah)) * Double(remaining.minutes)
+            let timeToTen = formatter.string(from: TimeInterval(minutesToTen * 60)) ?? "—"
+            timeToTenMinutesRemainingText = "Time to 10% Left: \(timeToTen)"
+        } else {
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
+        }
+    }
+
+    private func updateTimeToNextCycle(modelContext: ModelContext, todayDate: Date) {
+        let isPaused = currentPowerSourceState == .ac
+        if isPaused, let lastTimeToNextCycleValue {
+            timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Paused)"
+            return
+        } else if isPaused {
+            timeToNextCycleText = "Time Until Next Cycle: —"
+            return
+        }
+
+        guard let mahToNextCycle,
+              mahToNextCycle > 0 else {
+            if let lastTimeToNextCycleValue {
+                timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Unpaused - Calculating)"
+            } else {
+                timeToNextCycleText = "Time Until Next Cycle: —"
+            }
+            return
+        }
+
+        if let today = fetchDailyCycle(for: todayDate, modelContext: modelContext),
+           today.timeOnBattery > 0,
+           today.totalMahUsed > 0 {
+            let mahPerSecond = today.totalMahUsed / today.timeOnBattery
+            if mahPerSecond > 0 {
+                let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
+                let formatted = formatDuration(secondsRemaining)
+                lastTimeToNextCycleValue = formatted
+                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
+                return
+            }
+        }
+
+        if let remaining = getBatteryTimeRemaining(),
+           remaining.isCharging == false,
+           let currentCapacityMah,
+           remaining.minutes > 0,
+           currentCapacityMah > 0 {
+            let secondsToEmpty = Double(remaining.minutes * 60)
+            let mahPerSecond = Double(currentCapacityMah) / secondsToEmpty
+            if mahPerSecond > 0 {
+                let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
+                let formatted = formatDuration(secondsRemaining)
+                lastTimeToNextCycleValue = formatted
+                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
+                return
+            }
+        }
+
+        if let lastTimeToNextCycleValue {
+            timeToNextCycleText = "Time Until Next Cycle: \(lastTimeToNextCycleValue) (Unpaused - Calculating)"
+        } else {
+            timeToNextCycleText = "Time Until Next Cycle: —"
+        }
+    }
+
+    private func formatDuration(_ seconds: Double) -> String {
+        let formatter = DateComponentsFormatter()
+        formatter.allowedUnits = [.hour, .minute]
+        formatter.unitsStyle = .abbreviated
+        return formatter.string(from: seconds) ?? "—"
     }
 
     func updateDailyStats(modelContext: ModelContext, todayDate: Date) {
@@ -221,6 +400,8 @@ final class BatteryStatusViewModel {
             if let currentCapacityMah {
                 defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForUsage)
             }
+            defaults.set(0.0, forKey: DefaultsKeys.todayMahUsed)
+            totalMahUsedToday = 0
             defaults.set(todayKey, forKey: DefaultsKeys.lastSampleDateKey)
             defaults.set(now.timeIntervalSince1970, forKey: DefaultsKeys.lastSampleTimestamp)
             defaults.set(currentPowerState.rawValue, forKey: DefaultsKeys.lastPowerSourceState)
@@ -238,7 +419,12 @@ final class BatteryStatusViewModel {
         }
 
         let existing = fetchDailyCycle(for: todayDate, modelContext: modelContext)
+        let cachedMahUsed = defaults.double(forKey: DefaultsKeys.todayMahUsed)
+        if cachedMahUsed == 0, let existing, existing.totalMahUsed > 0 {
+            defaults.set(existing.totalMahUsed, forKey: DefaultsKeys.todayMahUsed)
+        }
         let totalMahUsed = updateMahUsed(existing: existing)
+        totalMahUsedToday = totalMahUsed
         let timeOnBattery = (existing?.timeOnBattery ?? 0) + (effectiveState == .battery ? elapsed : 0)
         let timePluggedIn = (existing?.timePluggedIn ?? 0) + (effectiveState == .ac ? elapsed : 0)
         let rawCycles = calculateRawCycles(totalMahUsed: totalMahUsed)
@@ -257,16 +443,41 @@ final class BatteryStatusViewModel {
         defaults.set(todayKey, forKey: DefaultsKeys.lastSampleDateKey)
         defaults.set(now.timeIntervalSince1970, forKey: DefaultsKeys.lastSampleTimestamp)
         defaults.set(currentPowerState.rawValue, forKey: DefaultsKeys.lastPowerSourceState)
+        try? modelContext.save()
+    }
+
+    func incrementTodayCycle(modelContext: ModelContext) {
+        let todayDate = Calendar.current.startOfDay(for: Date())
+        let existing = fetchDailyCycle(for: todayDate, modelContext: modelContext)
+        let currentCycles = existing?.cycles ?? cyclesToday ?? 0
+        let newCycles = currentCycles + 1
+
+        upsertDailyCycle(
+            for: todayDate,
+            modelContext: modelContext,
+            existing: existing
+        ) { daily in
+            daily.cycles = newCycles
+        }
+
+        if let cycleCount {
+            let adjustedBaseline = max(0, cycleCount - newCycles)
+            UserDefaults.standard.set(adjustedBaseline, forKey: DefaultsKeys.cyclesBaselineCount)
+            UserDefaults.standard.set(Self.dayFormatter.string(from: Date()), forKey: DefaultsKeys.cyclesBaselineDate)
+        }
+
+        cyclesToday = newCycles
+        try? modelContext.save()
     }
 
     private func updateMahUsed(existing: DailyCycle?) -> Double {
         guard let currentCapacityMah else {
-            return existing?.totalMahUsed ?? 0
+            return UserDefaults.standard.double(forKey: DefaultsKeys.todayMahUsed)
         }
 
         let defaults = UserDefaults.standard
         let lastCapacity = defaults.object(forKey: DefaultsKeys.lastCapacityMahForUsage) as? Int
-        let previousTotal = existing?.totalMahUsed ?? 0
+        let previousTotal = defaults.double(forKey: DefaultsKeys.todayMahUsed)
 
         defer {
             defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForUsage)
@@ -277,19 +488,23 @@ final class BatteryStatusViewModel {
         }
 
         let delta = Double(lastCapacity - currentCapacityMah)
-        return previousTotal + max(0, delta)
+        let updatedTotal = previousTotal + max(0, delta)
+        defaults.set(updatedTotal, forKey: DefaultsKeys.todayMahUsed)
+        return updatedTotal
     }
 
     private func calculateRawCycles(totalMahUsed: Double) -> Double {
-        guard let maxCapacityMah, maxCapacityMah > 0 else {
+        guard let designCapacityMah, designCapacityMah > 0 else {
             return 0
         }
 
-        return totalMahUsed / Double(maxCapacityMah)
+        return totalMahUsed / Double(designCapacityMah)
     }
 
     func revealStoreLocation(modelContext: ModelContext) {
-        guard let url = modelContext.container.configurations.first?.url else {
+        let configuredURL = modelContext.container.configurations.first?.url
+        let url = (configuredURL?.path == "/dev/null") ? persistentStoreURLFallback() : configuredURL
+        guard let url else {
             storeLocationMessage = "No on-disk store URL available."
             return
         }
@@ -299,6 +514,18 @@ final class BatteryStatusViewModel {
         NSPasteboard.general.setString(path, forType: .string)
         NSWorkspace.shared.activateFileViewerSelecting([url])
         storeLocationMessage = "Path copied to clipboard:\n\(path)"
+    }
+
+    private func persistentStoreURLFallback() -> URL? {
+        guard let supportDirectory = FileManager.default.urls(
+            for: .applicationSupportDirectory,
+            in: .userDomainMask
+        ).first else {
+            return nil
+        }
+
+        let directory = supportDirectory.appendingPathComponent("BatteryTracker", isDirectory: true)
+        return directory.appendingPathComponent("BatteryTracker.store")
     }
 
     func formatDecimal(_ value: Double) -> String {

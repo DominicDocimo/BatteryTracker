@@ -66,7 +66,11 @@ private extension BatteryTrackerApp {
             return directory.appendingPathComponent("BatteryTracker.store")
         }
 
-        return directory.appendingPathComponent("BatteryTracker.store")
+        let storeURL = directory.appendingPathComponent("BatteryTracker.store")
+        if supportDirectory?.path.contains("/Library/Containers/") == false {
+            syncSandboxStoreIfNeeded(destinationURL: storeURL)
+        }
+        return storeURL
     }
 
     static func deleteStore(at url: URL) {
@@ -79,6 +83,67 @@ private extension BatteryTrackerApp {
                 try? fileManager.removeItem(at: target)
             }
         }
+    }
+
+    static func syncSandboxStoreIfNeeded(destinationURL: URL) {
+        guard let sandboxURL = sandboxStoreURL() else {
+            return
+        }
+
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: sandboxURL.path) else {
+            return
+        }
+
+        let shouldSync = shouldSyncSandboxStore(from: sandboxURL, to: destinationURL)
+        guard shouldSync else {
+            return
+        }
+
+        let relatedExtensions = ["", "-shm", "-wal"]
+        for suffix in relatedExtensions {
+            let source = URL(fileURLWithPath: sandboxURL.path + suffix)
+            let destination = URL(fileURLWithPath: destinationURL.path + suffix)
+            guard fileManager.fileExists(atPath: source.path) else {
+                continue
+            }
+            if fileManager.fileExists(atPath: destination.path) {
+                try? fileManager.removeItem(at: destination)
+            }
+            try? fileManager.copyItem(at: source, to: destination)
+        }
+    }
+
+    static func shouldSyncSandboxStore(from sourceURL: URL, to destinationURL: URL) -> Bool {
+        let fileManager = FileManager.default
+        guard fileManager.fileExists(atPath: destinationURL.path) else {
+            return true
+        }
+
+        let sourceModified = (try? fileManager.attributesOfItem(atPath: sourceURL.path)[.modificationDate]) as? Date
+        let destinationModified = (try? fileManager.attributesOfItem(atPath: destinationURL.path)[.modificationDate]) as? Date
+        if let sourceModified, let destinationModified {
+            return sourceModified >= destinationModified
+        }
+
+        return true
+    }
+
+    static func sandboxStoreURL() -> URL? {
+        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
+            return nil
+        }
+
+        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
+        let directory = homeDirectory
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Containers", isDirectory: true)
+            .appendingPathComponent(bundleIdentifier, isDirectory: true)
+            .appendingPathComponent("Data", isDirectory: true)
+            .appendingPathComponent("Library", isDirectory: true)
+            .appendingPathComponent("Application Support", isDirectory: true)
+            .appendingPathComponent("BatteryTracker", isDirectory: true)
+        return directory.appendingPathComponent("BatteryTracker.store")
     }
 
     static func migrateLegacyHistoryIfNeeded(container: ModelContainer) {
@@ -163,4 +228,3 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 }
-

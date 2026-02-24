@@ -16,6 +16,7 @@ final class DailyCycle {
     var totalMahUsed: Double
     var timeOnBattery: Double
     var timePluggedIn: Double
+    @Relationship(deleteRule: .cascade) var cycleBreakdowns: [CycleBreakdown] = []
 
     init(date: Date,
          cycles: Int,
@@ -29,5 +30,22 @@ final class DailyCycle {
         self.totalMahUsed = totalMahUsed
         self.timeOnBattery = timeOnBattery
         self.timePluggedIn = timePluggedIn
+    }
+}
+
+@Model
+final class CycleBreakdown {
+    @Attribute(.unique) var id: UUID
+    var index: Int
+    var mahUsed: Double
+    var isPartial: Bool
+    var completionPercent: Double
+
+    init(index: Int, mahUsed: Double, isPartial: Bool, completionPercent: Double) {
+        self.id = UUID()
+        self.index = index
+        self.mahUsed = mahUsed
+        self.isPartial = isPartial
+        self.completionPercent = completionPercent
     }
 }
