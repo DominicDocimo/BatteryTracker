@@ -25,7 +25,7 @@ final class BatteryStatusViewModel {
     var cyclesPerDayNeeded: Double?
     var mahToNextCycle: Int?
     var timeRemainingText: String = "Time to Full/Empty: —"
-    var timeToTenMinutesRemainingText: String = "Time to 10 Minutes Remaining: —"
+    var timeToTenMinutesRemainingText: String = "Time to 10% Left: —"
     var timeToNextCycleText: String = "Time Until Next Cycle: —"
     var storeLocationMessage: String?
     var currentPowerSourceState: PowerSourceState = .unknown
@@ -40,6 +40,9 @@ final class BatteryStatusViewModel {
         static let lastCapacityMahForCycle = "lastCapacityMahForCycle"
         static let lastCycleCount = "lastCycleCount"
         static let dischargedSinceLastCycleMah = "dischargedSinceLastCycleMah"
+        static let cycleMahUsedDayKey = "cycleMahUsedDayKey"
+        static let cycleMahUsedToday = "cycleMahUsedToday"
+        static let cycleStartedPreviousDay = "cycleStartedPreviousDay"
         static let lastSampleDateKey = "lastSampleDateKey"
         static let lastSampleTimestamp = "lastSampleTimestamp"
         static let lastPowerSourceState = "lastPowerSourceState"
@@ -72,7 +75,7 @@ final class BatteryStatusViewModel {
         let todayDate = Calendar.current.startOfDay(for: Date())
         updateCyclesToday(modelContext: modelContext, todayDate: todayDate)
         updateCyclesPerDayNeeded()
-        updateMahToNextCycle()
+        updateMahToNextCycle(modelContext: modelContext, todayDate: todayDate)
         updateTimeRemaining()
         updateTimeToNextCycle(modelContext: modelContext, todayDate: todayDate)
         updateDailyStats(modelContext: modelContext, todayDate: todayDate)
@@ -166,7 +169,7 @@ final class BatteryStatusViewModel {
         cyclesPerDayNeeded = Double(remainingCycles) / Double(daysRemaining)
     }
 
-    func updateMahToNextCycle() {
+    func updateMahToNextCycle(modelContext: ModelContext, todayDate: Date) {
         guard let currentCapacityMah,
               let designCapacityMah,
               designCapacityMah > 0 else {
@@ -175,6 +178,29 @@ final class BatteryStatusViewModel {
         }
 
         let defaults = UserDefaults.standard
+        let todayKey = Self.dayFormatter.string(from: Date())
+        let storedDayKey = defaults.string(forKey: DefaultsKeys.cycleMahUsedDayKey)
+        var cycleMahUsedToday = defaults.double(forKey: DefaultsKeys.cycleMahUsedToday)
+        var cycleStartedPreviousDay = defaults.bool(forKey: DefaultsKeys.cycleStartedPreviousDay)
+
+        if storedDayKey != todayKey {
+            if let storedDayKey,
+               let previousDate = Self.dayFormatter.date(from: storedDayKey),
+               cycleMahUsedToday > 0 {
+                appendCycleBreakdown(
+                    for: previousDate,
+                    modelContext: modelContext,
+                    mahUsed: cycleMahUsedToday,
+                    designCapacityMah: designCapacityMah,
+                    isPartial: true
+                )
+                cycleStartedPreviousDay = true
+            }
+
+            cycleMahUsedToday = 0
+            defaults.set(todayKey, forKey: DefaultsKeys.cycleMahUsedDayKey)
+        }
+
         let lastCapacity = defaults.object(forKey: DefaultsKeys.lastCapacityMahForCycle) as? Int
         let lastCycle = defaults.object(forKey: DefaultsKeys.lastCycleCount) as? Int
         var discharged = defaults.double(forKey: DefaultsKeys.dischargedSinceLastCycleMah)
@@ -184,10 +210,23 @@ final class BatteryStatusViewModel {
         } ?? false
 
         if didIncrementCycle {
+            if cycleMahUsedToday > 0 {
+                appendCycleBreakdown(
+                    for: todayDate,
+                    modelContext: modelContext,
+                    mahUsed: cycleMahUsedToday,
+                    designCapacityMah: designCapacityMah,
+                    isPartial: cycleStartedPreviousDay
+                )
+            }
+            cycleMahUsedToday = 0
+            cycleStartedPreviousDay = false
             discharged = 0
             defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForCycle)
         } else if let lastCapacity, currentCapacityMah < lastCapacity {
-            discharged += Double(lastCapacity - currentCapacityMah)
+            let delta = Double(lastCapacity - currentCapacityMah)
+            discharged += delta
+            cycleMahUsedToday += delta
         }
 
         defaults.set(currentCapacityMah, forKey: DefaultsKeys.lastCapacityMahForCycle)
@@ -195,20 +234,61 @@ final class BatteryStatusViewModel {
             defaults.set(cycleCount, forKey: DefaultsKeys.lastCycleCount)
         }
         defaults.set(discharged, forKey: DefaultsKeys.dischargedSinceLastCycleMah)
+        defaults.set(cycleMahUsedToday, forKey: DefaultsKeys.cycleMahUsedToday)
+        defaults.set(cycleStartedPreviousDay, forKey: DefaultsKeys.cycleStartedPreviousDay)
 
         let remaining = max(0.0, Double(designCapacityMah) - discharged)
         mahToNextCycle = Int(ceil(remaining))
     }
+
+    private func appendCycleBreakdown(
+        for date: Date,
+        modelContext: ModelContext,
+        mahUsed: Double,
+        designCapacityMah: Int,
+        isPartial: Bool
+    ) {
+        guard mahUsed > 0 else {
+            return
+        }
+
+        let targetDate = Calendar.current.startOfDay(for: date)
+        let completionPercent = min(100.0, max(0.0, (mahUsed / Double(designCapacityMah)) * 100.0))
+        let breakdown = CycleBreakdown(
+            index: nextCycleIndex(for: targetDate, modelContext: modelContext),
+            mahUsed: mahUsed,
+            isPartial: isPartial,
+            completionPercent: completionPercent
+        )
+
+        if let existing = fetchDailyCycle(for: targetDate, modelContext: modelContext) {
+            existing.cycleBreakdowns.append(breakdown)
+        } else {
+            let daily = DailyCycle(date: targetDate, cycles: 0)
+            daily.cycleBreakdowns = [breakdown]
+            modelContext.insert(daily)
+        }
+
+        try? modelContext.save()
+    }
+
+    private func nextCycleIndex(for date: Date, modelContext: ModelContext) -> Int {
+        guard let existing = fetchDailyCycle(for: date, modelContext: modelContext) else {
+            return 1
+        }
+        let maxIndex = existing.cycleBreakdowns.map(\.index).max() ?? 0
+        return maxIndex + 1
+    }
     private func updateTimeRemaining() {
         guard let remaining = getBatteryTimeRemaining() else {
             timeRemainingText = "Time to Full/Empty: —"
-            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
             return
         }
 
         guard remaining.minutes > 0 else {
             timeRemainingText = "Time to Full/Empty: —"
-            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
             return
         }
 
@@ -218,17 +298,27 @@ final class BatteryStatusViewModel {
         let formatted = formatter.string(from: TimeInterval(remaining.minutes * 60)) ?? "—"
         if remaining.isCharging {
             timeRemainingText = "Time to Full: \(formatted)"
-            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
             return
         }
 
         timeRemainingText = "Time to Empty: \(formatted)"
-        let minutesToTen = remaining.minutes - 10
-        if minutesToTen > 0 {
+        guard let currentCapacityMah,
+              let maxCapacityMah,
+              currentCapacityMah > 0,
+              maxCapacityMah > 0 else {
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
+            return
+        }
+
+        let targetMah = Double(maxCapacityMah) * 0.10
+        let remainingToTen = Double(currentCapacityMah) - targetMah
+        if remainingToTen > 0 {
+            let minutesToTen = (remainingToTen / Double(currentCapacityMah)) * Double(remaining.minutes)
             let timeToTen = formatter.string(from: TimeInterval(minutesToTen * 60)) ?? "—"
-            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: \(timeToTen)"
+            timeToTenMinutesRemainingText = "Time to 10% Left: \(timeToTen)"
         } else {
-            timeToTenMinutesRemainingText = "Time to 10 Minutes Remaining: —"
+            timeToTenMinutesRemainingText = "Time to 10% Left: —"
         }
     }
 
