@@ -6,6 +6,12 @@
 	objectVersion = 77;
 	objects = {
 
+/* Begin PBXBuildFile section */
+		B696D33A2F4E5CF4001B29B7 /* SettingsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B696D3392F4E5CF4001B29B7 /* SettingsView.swift */; };
+		B696D33C2F4E5CFD001B29B7 /* DevToolsView.swift in Sources */ = {isa = PBXBuildFile; fileRef = B696D33B2F4E5CFD001B29B7 /* DevToolsView.swift */; };
+		B696D33E2F4E5F75001B29B7 /* CSVBackupService.swift in Sources */ = {isa = PBXBuildFile; fileRef = B696D33D2F4E5F75001B29B7 /* CSVBackupService.swift */; };
+/* End PBXBuildFile section */
+
 /* Begin PBXContainerItemProxy section */
 		B6E0762C2F44F92B003B40CC /* PBXContainerItemProxy */ = {
 			isa = PBXContainerItemProxy;
@@ -24,6 +30,9 @@
 /* End PBXContainerItemProxy section */
 
 /* Begin PBXFileReference section */
+		B696D3392F4E5CF4001B29B7 /* SettingsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SettingsView.swift; sourceTree = "<group>"; };
+		B696D33B2F4E5CFD001B29B7 /* DevToolsView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = DevToolsView.swift; sourceTree = "<group>"; };
+		B696D33D2F4E5F75001B29B7 /* CSVBackupService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = CSVBackupService.swift; sourceTree = "<group>"; };
 		B6E0761E2F44F92A003B40CC /* BatteryTracker.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = BatteryTracker.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6E0762B2F44F92B003B40CC /* BatteryTrackerTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BatteryTrackerTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
 		B6E076352F44F92B003B40CC /* BatteryTrackerUITests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = BatteryTrackerUITests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
@@ -79,6 +88,9 @@
 				B6E0762E2F44F92B003B40CC /* BatteryTrackerTests */,
 				B6E076382F44F92B003B40CC /* BatteryTrackerUITests */,
 				B6E0761F2F44F92A003B40CC /* Products */,
+				B696D3392F4E5CF4001B29B7 /* SettingsView.swift */,
+				B696D33B2F4E5CFD001B29B7 /* DevToolsView.swift */,
+				B696D33D2F4E5F75001B29B7 /* CSVBackupService.swift */,
 			);
 			sourceTree = "<group>";
 		};
@@ -257,6 +269,9 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				B696D33C2F4E5CFD001B29B7 /* DevToolsView.swift in Sources */,
+				B696D33A2F4E5CF4001B29B7 /* SettingsView.swift in Sources */,
+				B696D33E2F4E5F75001B29B7 /* CSVBackupService.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

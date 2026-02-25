@@ -12,178 +12,87 @@ import SwiftData
 @main
 struct BatteryTrackerApp: App {
     @NSApplicationDelegateAdaptor(AppDelegate.self) private var appDelegate
-    private static let migrationFlagKey = "didMigrateCycleHistoryToSwiftData"
-    private static let legacyHistoryKey = "cyclesHistory"
     private let container: ModelContainer
 
     init() {
         container = Self.makeContainer()
-        Self.migrateLegacyHistoryIfNeeded(container: container)
     }
 
     var body: some Scene {
         MenuBarExtra("42 cycles/day", systemImage: "battery.100") {
             ContentView()
+                .modelContainer(container)
         }
         .menuBarExtraStyle(.window)
-        .modelContainer(container)
 
         Window("History", id: "history") {
             HistoryView()
+                .modelContainer(container)
         }
-        .modelContainer(container)
+
+        Window("Settings", id: "settings") {
+            SettingsView()
+        }
+
+        Window("Dev Tools", id: "devTools") {
+            DevToolsView()
+                .modelContainer(container)
+        }
     }
 }
 
 private extension BatteryTrackerApp {
 
     static func makeContainer() -> ModelContainer {
-        let schema = Schema([DailyCycle.self])
-
-        let storeURL = persistentStoreURL()
-        let configuration = ModelConfiguration("BatteryTracker", schema: schema, url: storeURL)
+        let schema = Schema([DailyCycle.self, CycleBreakdown.self])
+        let storeURL = hardOverrideStoreURL()
+        let configuration = ModelConfiguration(
+            "BatteryTracker",
+            schema: schema,
+            url: storeURL
+        )
 
         do {
-            return try ModelContainer(for: schema, configurations: [configuration])
-        } catch {
-            deleteStore(at: storeURL)
-            do {
-                return try ModelContainer(for: schema, configurations: [configuration])
-            } catch {
-                fatalError("Failed to create SwiftData container: \(error)")
+            let container = try ModelContainer(for: schema, configurations: configuration)
+            if container.configurations.first?.url.path == "/dev/null" {
+                fatalError("SwiftData resolved store to /dev/null.\nStore: \(storeURL.path)")
             }
+            return container
+        } catch {
+            fatalError("Failed to create SwiftData container: \(error)\\nStore: \(storeURL.path)")
         }
     }
 
     static func persistentStoreURL() -> URL {
-        let supportDirectory = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first
-        let directory = (supportDirectory ?? URL(fileURLWithPath: NSTemporaryDirectory()))
-            .appendingPathComponent("BatteryTracker", isDirectory: true)
+        let fileManager = FileManager.default
+        let base = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let directory = base.appendingPathComponent("BatteryTracker", isDirectory: true)
 
         do {
-            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
         } catch {
-            return directory.appendingPathComponent("BatteryTracker.store")
+            return fileManager.temporaryDirectory.appendingPathComponent("BatteryTracker.store")
         }
 
-        let storeURL = directory.appendingPathComponent("BatteryTracker.store")
-        if supportDirectory?.path.contains("/Library/Containers/") == false {
-            syncSandboxStoreIfNeeded(destinationURL: storeURL)
-        }
-        return storeURL
-    }
-
-    static func deleteStore(at url: URL) {
-        let fileManager = FileManager.default
-        let relatedExtensions = ["", "-shm", "-wal"]
-
-        for suffix in relatedExtensions {
-            let target = URL(fileURLWithPath: url.path + suffix)
-            if fileManager.fileExists(atPath: target.path) {
-                try? fileManager.removeItem(at: target)
-            }
-        }
-    }
-
-    static func syncSandboxStoreIfNeeded(destinationURL: URL) {
-        guard let sandboxURL = sandboxStoreURL() else {
-            return
-        }
-
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: sandboxURL.path) else {
-            return
-        }
-
-        let shouldSync = shouldSyncSandboxStore(from: sandboxURL, to: destinationURL)
-        guard shouldSync else {
-            return
-        }
-
-        let relatedExtensions = ["", "-shm", "-wal"]
-        for suffix in relatedExtensions {
-            let source = URL(fileURLWithPath: sandboxURL.path + suffix)
-            let destination = URL(fileURLWithPath: destinationURL.path + suffix)
-            guard fileManager.fileExists(atPath: source.path) else {
-                continue
-            }
-            if fileManager.fileExists(atPath: destination.path) {
-                try? fileManager.removeItem(at: destination)
-            }
-            try? fileManager.copyItem(at: source, to: destination)
-        }
-    }
-
-    static func shouldSyncSandboxStore(from sourceURL: URL, to destinationURL: URL) -> Bool {
-        let fileManager = FileManager.default
-        guard fileManager.fileExists(atPath: destinationURL.path) else {
-            return true
-        }
-
-        let sourceModified = (try? fileManager.attributesOfItem(atPath: sourceURL.path)[.modificationDate]) as? Date
-        let destinationModified = (try? fileManager.attributesOfItem(atPath: destinationURL.path)[.modificationDate]) as? Date
-        if let sourceModified, let destinationModified {
-            return sourceModified >= destinationModified
-        }
-
-        return true
-    }
-
-    static func sandboxStoreURL() -> URL? {
-        guard let bundleIdentifier = Bundle.main.bundleIdentifier else {
-            return nil
-        }
-
-        let homeDirectory = FileManager.default.homeDirectoryForCurrentUser
-        let directory = homeDirectory
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Containers", isDirectory: true)
-            .appendingPathComponent(bundleIdentifier, isDirectory: true)
-            .appendingPathComponent("Data", isDirectory: true)
-            .appendingPathComponent("Library", isDirectory: true)
-            .appendingPathComponent("Application Support", isDirectory: true)
-            .appendingPathComponent("BatteryTracker", isDirectory: true)
         return directory.appendingPathComponent("BatteryTracker.store")
     }
 
-    static func migrateLegacyHistoryIfNeeded(container: ModelContainer) {
-        let defaults = UserDefaults.standard
-        guard defaults.bool(forKey: migrationFlagKey) == false else {
-            return
+    static func hardOverrideStoreURL() -> URL {
+        let fileManager = FileManager.default
+        let base = URL(fileURLWithPath: NSHomeDirectory())
+            .appendingPathComponent("Library/Application Support", isDirectory: true)
+        let directory = base.appendingPathComponent("BatteryTracker", isDirectory: true)
+
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+        } catch {
+            return fileManager.temporaryDirectory.appendingPathComponent("BatteryTracker.store")
         }
 
-        let legacyHistory = defaults.dictionary(forKey: legacyHistoryKey) as? [String: Int] ?? [:]
-        guard legacyHistory.isEmpty == false else {
-            defaults.set(true, forKey: migrationFlagKey)
-            return
-        }
-
-        let context = ModelContext(container)
-        let formatter = DateFormatter()
-        formatter.calendar = Calendar.current
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.dateFormat = "yyyy-MM-dd"
-
-        for (key, cycles) in legacyHistory {
-            guard let parsedDate = formatter.date(from: key) else {
-                continue
-            }
-
-            let date = Calendar.current.startOfDay(for: parsedDate)
-            let descriptor = FetchDescriptor<DailyCycle>(
-                predicate: #Predicate { $0.date == date }
-            )
-
-            if let existing = try? context.fetch(descriptor).first {
-                existing.cycles = cycles
-            } else {
-                context.insert(DailyCycle(date: date, cycles: cycles))
-            }
-        }
-
-        try? context.save()
-        defaults.set(true, forKey: migrationFlagKey)
+        return directory.appendingPathComponent("BatteryTracker.store")
     }
+
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {

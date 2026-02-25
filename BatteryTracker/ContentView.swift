@@ -18,6 +18,7 @@ private let appDelegate = AppDelegate.shared
 struct ContentView: View {
     @State private var viewModel = BatteryStatusViewModel()
     @State private var usesClockwiseProgression = true
+    @AppStorage("isEditModeEnabled") private var isEditModeEnabled = false
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
     private let ringLineWidth: CGFloat = 6
@@ -139,6 +140,9 @@ struct ContentView: View {
                     viewModel.revealStoreLocation(modelContext: modelContext)
                 }
             }
+            Button("Settings") {
+                showSettingsWindow()
+            }
 /*
             Button("Show Store Location") {
                 viewModel.revealStoreLocation(modelContext: modelContext)
@@ -151,6 +155,7 @@ struct ContentView: View {
         .padding(.top, 6)
         .padding(.leading, 7)
         .padding(.bottom, 10)
+        .frame(maxWidth: .infinity, alignment: .leading)
         .frame(width: 320)
         .alert("SwiftData Store Location", isPresented: Binding(
             get: { viewModel.storeLocationMessage != nil },
@@ -165,14 +170,32 @@ struct ContentView: View {
             Text(viewModel.storeLocationMessage ?? "Unavailable")
         }
         .task {
-            viewModel.updateBatteryInfo(modelContext: modelContext)
-            await viewModel.refreshOfficialBatteryHealthPercent()
-            while !Task.isCancelled {
-                let interval = viewModel.refreshIntervalSeconds()
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+            usesClockwiseProgression = UserDefaults.standard.bool(forKey: DefaultsKeys.usesClockwiseProgressionKey)
+            if UserDefaults.standard.object(forKey: DefaultsKeys.usesClockwiseProgressionKey) == nil {
+                usesClockwiseProgression = true
+            }
+            if isEditModeEnabled == false {
                 viewModel.updateBatteryInfo(modelContext: modelContext)
                 await viewModel.refreshOfficialBatteryHealthPercent()
             }
+            while !Task.isCancelled {
+                let interval = viewModel.refreshIntervalSeconds()
+                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                if isEditModeEnabled == false {
+                    viewModel.updateBatteryInfo(modelContext: modelContext)
+                    await viewModel.refreshOfficialBatteryHealthPercent()
+                }
+            }
+        }
+        .onChange(of: isEditModeEnabled) { _, newValue in
+            guard newValue == false else { return }
+            viewModel.updateBatteryInfo(modelContext: modelContext)
+            Task {
+                await viewModel.refreshOfficialBatteryHealthPercent()
+            }
+        }
+        .onChange(of: usesClockwiseProgression) { _, newValue in
+            UserDefaults.standard.set(newValue, forKey: DefaultsKeys.usesClockwiseProgressionKey)
         }
     }
 
@@ -188,6 +211,27 @@ struct ContentView: View {
             DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
                 if let window = NSApplication.shared.windows.first(where: {
                     $0.identifier?.rawValue == "history" || $0.title == "History"
+                }) {
+                    NSApplication.shared.activate(ignoringOtherApps: true)
+                    window.makeKeyAndOrderFront(nil)
+                    window.orderFrontRegardless()
+                }
+            }
+        }
+    }
+
+    private func showSettingsWindow() {
+        if let window = NSApplication.shared.windows.first(where: {
+            $0.identifier?.rawValue == "settings" || $0.title == "Settings"
+        }) {
+            NSApplication.shared.activate(ignoringOtherApps: true)
+            window.makeKeyAndOrderFront(nil)
+            window.orderFrontRegardless()
+        } else {
+            openWindow(id: "settings")
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
+                if let window = NSApplication.shared.windows.first(where: {
+                    $0.identifier?.rawValue == "settings" || $0.title == "Settings"
                 }) {
                     NSApplication.shared.activate(ignoringOtherApps: true)
                     window.makeKeyAndOrderFront(nil)
@@ -306,6 +350,10 @@ struct ContentView: View {
         let formatter = NumberFormatter()
         formatter.numberStyle = .decimal
         return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+    }
+
+    private enum DefaultsKeys {
+        static let usesClockwiseProgressionKey = "usesClockwiseProgression"
     }
 }
 
