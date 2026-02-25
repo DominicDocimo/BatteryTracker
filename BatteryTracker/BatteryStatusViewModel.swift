@@ -295,14 +295,15 @@ final class BatteryStatusViewModel {
         let formatter = DateComponentsFormatter()
         formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .abbreviated
-        let formatted = formatter.string(from: TimeInterval(remaining.minutes * 60)) ?? "—"
+        let remainingSeconds = Double(remaining.minutes * 60)
+        let formatted = formatter.string(from: TimeInterval(remainingSeconds)) ?? "—"
         if remaining.isCharging {
-            timeRemainingText = "Time to Full: \(formatted)"
+            timeRemainingText = appendReachTime(to: "Time to Full: \(formatted)", seconds: remainingSeconds)
             timeToTenMinutesRemainingText = "Time to 10% Left: —"
             return
         }
 
-        timeRemainingText = "Time to Empty: \(formatted)"
+        timeRemainingText = appendReachTime(to: "Time to Empty: \(formatted)", seconds: remainingSeconds)
         guard let currentCapacityMah,
               let maxCapacityMah,
               currentCapacityMah > 0,
@@ -316,7 +317,11 @@ final class BatteryStatusViewModel {
         if remainingToTen > 0 {
             let minutesToTen = (remainingToTen / Double(currentCapacityMah)) * Double(remaining.minutes)
             let timeToTen = formatter.string(from: TimeInterval(minutesToTen * 60)) ?? "—"
-            timeToTenMinutesRemainingText = "Time to 10% Left: \(timeToTen)"
+            let secondsToTen = minutesToTen * 60
+            timeToTenMinutesRemainingText = appendReachTime(
+                to: "Time to 10% Left: \(timeToTen)",
+                seconds: secondsToTen
+            )
         } else {
             timeToTenMinutesRemainingText = "Time to 10% Left: —"
         }
@@ -350,7 +355,10 @@ final class BatteryStatusViewModel {
                 let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
                 let formatted = formatDuration(secondsRemaining)
                 lastTimeToNextCycleValue = formatted
-                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
+                timeToNextCycleText = appendReachTime(
+                    to: "Time Until Next Cycle: \(formatted)",
+                    seconds: secondsRemaining
+                )
                 return
             }
         }
@@ -366,7 +374,10 @@ final class BatteryStatusViewModel {
                 let secondsRemaining = Double(mahToNextCycle) / mahPerSecond
                 let formatted = formatDuration(secondsRemaining)
                 lastTimeToNextCycleValue = formatted
-                timeToNextCycleText = "Time Until Next Cycle: \(formatted)"
+                timeToNextCycleText = appendReachTime(
+                    to: "Time Until Next Cycle: \(formatted)",
+                    seconds: secondsRemaining
+                )
                 return
             }
         }
@@ -383,6 +394,14 @@ final class BatteryStatusViewModel {
         formatter.allowedUnits = [.hour, .minute]
         formatter.unitsStyle = .abbreviated
         return formatter.string(from: seconds) ?? "—"
+    }
+
+    private func appendReachTime(to base: String, seconds: Double) -> String {
+        guard seconds > 0 else { return base }
+        let formatter = DateFormatter()
+        formatter.timeStyle = .short
+        let target = Date().addingTimeInterval(seconds)
+        return "\(base) (\(formatter.string(from: target)))"
     }
 
     func updateDailyStats(modelContext: ModelContext, todayDate: Date) {
