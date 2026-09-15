@@ -5,7 +5,6 @@
 //  Created by Dominic Docimo on 2/17/26.
 //
 
-import Combine
 import Foundation
 import SwiftData
 import SwiftUI
@@ -16,22 +15,20 @@ struct HistoryView: View {
     @State private var updater = BatteryStatusViewModel()
     @Environment(\.modelContext) private var modelContext
 
-    private let timer = Timer.publish(every: 1.0, on: .main, in: .common).autoconnect()
-
     var body: some View {
         NavigationSplitView {
             List(selection: $selection) {
                 Section("Summary") {
-                    SummaryRow(label: "Total Cycles Gained", value: "\(totalCycles)")
-                    SummaryRow(label: "Total Raw Cycles", value: formatDecimal(totalRawCycles))
-                    SummaryRow(label: "Total mAh Used", value: formatDecimal(totalMahUsed))
-                    SummaryRow(label: "Total Time on Battery", value: formatDuration(totalTimeOnBattery))
-                    SummaryRow(label: "Total Time Plugged In", value: formatDuration(totalTimePluggedIn))
+                    StatRow(label: "Total Cycles Gained", value: "\(totalCycles)")
+                    StatRow(label: "Total Raw Cycles", value: Formatting.decimal(totalRawCycles))
+                    StatRow(label: "Total mAh Used", value: Formatting.decimal(totalMahUsed))
+                    StatRow(label: "Total Time on Battery", value: Formatting.duration(totalTimeOnBattery))
+                    StatRow(label: "Total Time Plugged In", value: Formatting.duration(totalTimePluggedIn))
                 }
 
                 Section("Days") {
                     ForEach(entries) { entry in
-                        Text(formatDate(entry.date))
+                        Text(Formatting.date(entry.date))
                             .tag(entry)
                     }
                 }
@@ -48,20 +45,25 @@ struct HistoryView: View {
         .frame(minWidth: 520, minHeight: 360)
         .onAppear {
             AppDelegate.shared?.setDockVisible(true)
+            UserDefaults.standard.set(true, forKey: SharedDefaultsKeys.historyVisible)
             if selection == nil {
                 selection = entries.first
             }
         }
         .onDisappear {
             AppDelegate.shared?.setDockVisible(false)
+            UserDefaults.standard.set(false, forKey: SharedDefaultsKeys.historyVisible)
         }
         .onChange(of: entries) { _, newEntries in
             if selection == nil {
                 selection = newEntries.first
             }
         }
-        .onReceive(timer) { _ in
-            updater.updateBatteryInfo(modelContext: modelContext)
+        .task {
+            while !Task.isCancelled {
+                updater.updateBatteryInfo(modelContext: modelContext)
+                try? await Task.sleep(for: .seconds(1))
+            }
         }
     }
 
@@ -84,26 +86,6 @@ struct HistoryView: View {
     private var totalTimePluggedIn: Double {
         entries.reduce(0) { $0 + $1.timePluggedIn }
     }
-
-    private func formatDate(_ date: Date) -> String {
-        let output = DateFormatter()
-        output.calendar = Calendar.current
-        output.locale = Locale(identifier: "en_US_POSIX")
-        output.dateFormat = "MMMM d, yyyy"
-        return output.string(from: date)
-    }
-
-    private func formatDecimal(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    private func formatDuration(_ seconds: Double) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.unitsStyle = .abbreviated
-        formatter.zeroFormattingBehavior = .pad
-        return formatter.string(from: seconds) ?? "—"
-    }
 }
 
 private struct DailyStatsDetailView: View {
@@ -111,15 +93,15 @@ private struct DailyStatsDetailView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
-            Text(formatDate(entry.date))
+            Text(Formatting.date(entry.date))
                 .font(.title2)
                 .bold()
 
             StatRow(label: "Cycles Gained", value: "\(entry.cycles)")
-            StatRow(label: "Raw Cycles (mAh)", value: formatDecimal(entry.rawCycles))
-            StatRow(label: "Total mAh Used", value: formatDecimal(entry.totalMahUsed))
-            StatRow(label: "Time on Battery", value: formatDuration(entry.timeOnBattery))
-            StatRow(label: "Time Plugged In", value: formatDuration(entry.timePluggedIn))
+            StatRow(label: "Raw Cycles (mAh)", value: Formatting.decimal(entry.rawCycles))
+            StatRow(label: "Total mAh Used", value: Formatting.decimal(entry.totalMahUsed))
+            StatRow(label: "Time on Battery", value: Formatting.duration(entry.timeOnBattery))
+            StatRow(label: "Time Plugged In", value: Formatting.duration(entry.timePluggedIn))
 
             DisclosureGroup("Cycle Breakdown") {
                 if entry.cycleBreakdowns.isEmpty {
@@ -127,11 +109,11 @@ private struct DailyStatsDetailView: View {
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                 } else {
-                    ForEach(cycleBreakdowns) { breakdown in
+                    ForEach(sortedBreakdowns) { breakdown in
                         HStack {
-                            Text(cycleBreakdownLabel(for: breakdown))
+                            Text(label(for: breakdown))
                             Spacer()
-                            Text("\(formatDecimal(breakdown.mahUsed)) mAh")
+                            Text("\(Formatting.decimal(breakdown.mahUsed)) mAh")
                                 .monospacedDigit()
                         }
                         .font(.subheadline)
@@ -144,39 +126,15 @@ private struct DailyStatsDetailView: View {
         .padding()
     }
 
-    private var cycleBreakdowns: [CycleBreakdown] {
+    private var sortedBreakdowns: [CycleBreakdown] {
         entry.cycleBreakdowns.sorted { $0.index < $1.index }
     }
 
-    private func cycleBreakdownLabel(for breakdown: CycleBreakdown) -> String {
+    private func label(for breakdown: CycleBreakdown) -> String {
         if breakdown.isPartial {
-            return "Cycle \(breakdown.index) (Partial - \(formatPercent(breakdown.completionPercent)))"
+            return "Cycle \(breakdown.index) (Partial - \(Formatting.percent(breakdown.completionPercent)))"
         }
         return "Cycle \(breakdown.index)"
-    }
-
-    private func formatDate(_ date: Date) -> String {
-        let output = DateFormatter()
-        output.calendar = Calendar.current
-        output.locale = Locale(identifier: "en_US_POSIX")
-        output.dateFormat = "MMMM d, yyyy"
-        return output.string(from: date)
-    }
-
-    private func formatDecimal(_ value: Double) -> String {
-        String(format: "%.2f", value)
-    }
-
-    private func formatPercent(_ value: Double) -> String {
-        String(format: "%.2f%%", value)
-    }
-
-    private func formatDuration(_ seconds: Double) -> String {
-        let formatter = DateComponentsFormatter()
-        formatter.allowedUnits = [.hour, .minute, .second]
-        formatter.unitsStyle = .abbreviated
-        formatter.zeroFormattingBehavior = .pad
-        return formatter.string(from: seconds) ?? "—"
     }
 }
 
@@ -195,21 +153,7 @@ private struct StatRow: View {
     }
 }
 
-private struct SummaryRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-            Spacer()
-            Text(value)
-                .monospacedDigit()
-        }
-        .font(.subheadline)
-    }
-}
-
 #Preview {
     HistoryView()
+        .modelContainer(for: DailyCycle.self, inMemory: true)
 }

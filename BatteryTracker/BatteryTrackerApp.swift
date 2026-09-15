@@ -22,7 +22,7 @@ struct BatteryTrackerApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("42 cycles/day", systemImage: "battery.100") {
+        MenuBarExtra("Battery Tracker", systemImage: "battery.100") {
             ContentView()
         }
         .menuBarExtraStyle(.window)
@@ -196,14 +196,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         NSApplication.shared.setActivationPolicy(.accessory)
     }
 
-    func applicationWillFinishLaunching(_ notification: Notification) {
-        NSApplication.shared.setActivationPolicy(.accessory)
-    }
-
-    func applicationDidFinishLaunching(_ notification: Notification) {
-        NSApplication.shared.setActivationPolicy(.accessory)
-    }
-
+    // Ignore quit requests (e.g. Cmd+Q from the History window) unless they
+    // came from the menu bar's Quit button, so closing a window never kills
+    // the menu bar app. Returning to .accessory hides the Dock icon again.
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         if allowQuit {
             return .terminateNow
@@ -215,10 +210,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func requestQuit() {
         allowQuit = true
         NSApplication.shared.terminate(nil)
-    }
-
-    func hideDockIcon() {
-        NSApplication.shared.setActivationPolicy(.accessory)
     }
 
     func setDockVisible(_ visible: Bool) {

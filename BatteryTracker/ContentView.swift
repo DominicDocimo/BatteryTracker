@@ -5,15 +5,9 @@
 //  Created by Dominic Docimo on 2/17/26.
 //
 
-
-
-
 import AppKit
 import SwiftData
 import SwiftUI
-
-@MainActor
-private let appDelegate = AppDelegate.shared
 
 struct ContentView: View {
     @State private var viewModel = BatteryStatusViewModel()
@@ -21,9 +15,6 @@ struct ContentView: View {
     @Environment(\.openWindow) private var openWindow
     @Environment(\.modelContext) private var modelContext
     private let ringLineWidth: CGFloat = 6
-    private let showsAddCycleTodayButton = false
-    private let showsOpenInFinderButton = false
-    private let showsOpenPathToDatabaseButton = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -32,20 +23,18 @@ struct ContentView: View {
                let designCapacityMah = viewModel.designCapacityMah,
                designCapacityMah > 0 {
                 let dischargedSinceLastCycle = max(0, Double(designCapacityMah - mahToNextCycle))
-                let rawPercent = (dischargedSinceLastCycle / Double(designCapacityMah)) * 100
-                let percentComplete = min(100, max(0, rawPercent))
-                let progressPercent = (Double(cycleCount) / 1000.0) * 100.0
+                let percentComplete = min(100, max(0, (dischargedSinceLastCycle / Double(designCapacityMah)) * 100))
+                let progressPercent = (Double(cycleCount) / Double(BatteryGoal.targetCycles)) * 100.0
                 let cyclesTodayPercent = cyclesTodayProgressPercent()
-                let cyclesTodayDetail = cyclesTodayDetailText()
 
                 HStack(spacing: 18) {
                     ProgressRingView(
                         title: "Cycles",
-                        subtitle: "To 1,000",
-                        valueText: "\(String(format: "%.2f", progressPercent))%",
+                        subtitle: "To \(Formatting.integer(BatteryGoal.targetCycles))",
+                        valueText: "\(Formatting.decimal(progressPercent))%",
                         detailLines: [
-                            "\(formatInt(cycleCount))/1,000",
-                            timeUntilJuneFirstText()
+                            "\(Formatting.integer(cycleCount))/\(Formatting.integer(BatteryGoal.targetCycles))",
+                            daysUntilDeadlineText()
                         ],
                         progress: min(1, max(0, progressPercent / 100.0)),
                         accent: progressColor(for: progressPercent),
@@ -55,7 +44,7 @@ struct ContentView: View {
                     ProgressRingView(
                         title: "Cycle",
                         subtitle: "Completion",
-                        valueText: "\(String(format: "%.2f", percentComplete))%",
+                        valueText: "\(Formatting.decimal(percentComplete))%",
                         detailLines: cycleCompletionDetailLines(),
                         progress: percentComplete / 100.0,
                         accent: progressColor(for: percentComplete),
@@ -65,8 +54,8 @@ struct ContentView: View {
                     ProgressRingView(
                         title: "Cycles",
                         subtitle: "Today",
-                        valueText: cyclesTodayPercent.map { "\(String(format: "%.2f", $0))%" } ?? "—",
-                        detailLines: cyclesTodayDetailLines(baseText: cyclesTodayDetail),
+                        valueText: cyclesTodayPercent.map { "\(Formatting.decimal($0))%" } ?? "—",
+                        detailLines: cyclesTodayDetailLines(),
                         progress: max(0, (cyclesTodayPercent ?? 0) / 100.0),
                         accent: progressColor(for: cyclesTodayPercent ?? 0),
                         lineWidth: ringLineWidth,
@@ -74,13 +63,14 @@ struct ContentView: View {
                     )
                 }
                 .frame(maxWidth: .infinity)
+
                 Divider()
-                
             } else {
                 Text(viewModel.cycleCount.map(String.init) ?? "—")
                     .font(.largeTitle)
                     .bold()
             }
+
             Text("Battery")
                 .font(.headline)
                 .bold()
@@ -90,7 +80,7 @@ struct ContentView: View {
                 .font(.subheadline)
             if let cyclesPerDayNeeded = viewModel.cyclesPerDayNeeded {
                 let roundedUp = Int(ceil(cyclesPerDayNeeded))
-                Text("Cycles Per Day by Deadline: \(roundedUp) (\(viewModel.formatDecimal(cyclesPerDayNeeded)))")
+                Text("Cycles Per Day by Deadline: \(roundedUp) (\(Formatting.decimal(cyclesPerDayNeeded)))")
                     .font(.subheadline)
             } else {
                 Text("Cycles Per Day by Deadline: —")
@@ -106,15 +96,11 @@ struct ContentView: View {
                 .font(.subheadline)
             Text(viewModel.timeToTenMinutesRemainingText)
                 .font(.subheadline)
-            if let mahToNextCycle = viewModel.mahToNextCycle {
-                Text("mAh to Next Cycle: \(mahToNextCycle)")
-                    .font(.subheadline)
-            } else {
-                Text("mAh to Next Cycle: —")
-                    .font(.subheadline)
-            }
+            Text("mAh to Next Cycle: \(viewModel.mahToNextCycle.map(String.init) ?? "—")")
+                .font(.subheadline)
             Text(viewModel.timeToNextCycleText)
                 .font(.subheadline)
+
 
             Divider()
 
@@ -124,52 +110,20 @@ struct ContentView: View {
             Button(usesClockwiseProgression ? "Use Counterclockwise Progression" : "Use Clockwise Progression") {
                 usesClockwiseProgression.toggle()
             }
-            if showsAddCycleTodayButton {
-                Button("Add Cycle Today") {
-                    viewModel.incrementTodayCycle(modelContext: modelContext)
-                }
-            }
-            if showsOpenInFinderButton {
-                Button("Open in Finder") {
-                    revealAppInFinder()
-                }
-            }
-            if showsOpenPathToDatabaseButton {
-                Button("Open Path to Database") {
-                    viewModel.revealStoreLocation(modelContext: modelContext)
-                }
-            }
-/*
-            Button("Show Store Location") {
-                viewModel.revealStoreLocation(modelContext: modelContext)
-            }
-*/
             Button("Quit") {
-                appDelegate?.requestQuit()
+                AppDelegate.shared?.requestQuit()
             }
         }
         .padding(.top, 6)
-        .padding(.leading, 7)
+        .padding(.horizontal, 8)
         .padding(.bottom, 10)
         .frame(width: 320)
-        .alert("SwiftData Store Location", isPresented: Binding(
-            get: { viewModel.storeLocationMessage != nil },
-            set: { newValue in
-                if newValue == false {
-                    viewModel.storeLocationMessage = nil
-                }
-            }
-        )) {
-            Button("OK", role: .cancel) {}
-        } message: {
-            Text(viewModel.storeLocationMessage ?? "Unavailable")
-        }
         .task {
             viewModel.updateBatteryInfo(modelContext: modelContext)
             await viewModel.refreshOfficialBatteryHealthPercent()
             while !Task.isCancelled {
                 let interval = viewModel.refreshIntervalSeconds()
-                try? await Task.sleep(nanoseconds: UInt64(interval * 1_000_000_000))
+                try? await Task.sleep(for: .seconds(interval))
                 viewModel.updateBatteryInfo(modelContext: modelContext)
                 await viewModel.refreshOfficialBatteryHealthPercent()
             }
@@ -177,40 +131,18 @@ struct ContentView: View {
     }
 
     private func showHistoryWindow() {
-        if let window = NSApplication.shared.windows.first(where: {
-            $0.identifier?.rawValue == "history" || $0.title == "History"
-        }) {
-            NSApplication.shared.activate(ignoringOtherApps: true)
-            window.makeKeyAndOrderFront(nil)
-            window.orderFrontRegardless()
-        } else {
-            openWindow(id: "history")
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.1) {
-                if let window = NSApplication.shared.windows.first(where: {
-                    $0.identifier?.rawValue == "history" || $0.title == "History"
-                }) {
-                    NSApplication.shared.activate(ignoringOtherApps: true)
-                    window.makeKeyAndOrderFront(nil)
-                    window.orderFrontRegardless()
-                }
-            }
-        }
-    }
-
-    private func revealAppInFinder() {
-        NSWorkspace.shared.activateFileViewerSelecting([Bundle.main.bundleURL])
+        openWindow(id: "history")
+        NSApplication.shared.activate(ignoringOtherApps: true)
     }
 
     private func progressColor(for percent: Double) -> Color {
         switch percent {
-        case ..<0:
-            return .red
-        case 0...35:
-            return .red
-        case 35.000001...75:
-            return .yellow
+        case ...35:
+            .red
+        case ...75:
+            .yellow
         default:
-            return .green
+            .green
         }
     }
 
@@ -225,17 +157,7 @@ struct ContentView: View {
             return nil
         }
 
-        let percent = (Double(cyclesToday) / Double(roundedUp)) * 100.0
-        return max(0, percent)
-    }
-
-    private func cyclesTodayDetailText() -> String {
-        let cyclesToday = viewModel.cyclesToday ?? 0
-        if let cyclesPerDayNeeded = viewModel.cyclesPerDayNeeded {
-            let roundedUp = Int(ceil(cyclesPerDayNeeded))
-            return "\(formatInt(cyclesToday))/\(formatInt(roundedUp))"
-        }
-        return "\(formatInt(cyclesToday))/—"
+        return max(0, (Double(cyclesToday) / Double(roundedUp)) * 100.0)
     }
 
     private func cycleCompletionDetailLines() -> [String] {
@@ -246,26 +168,27 @@ struct ContentView: View {
         }
 
         let discharged = max(0, designCapacityMah - mahToNextCycle)
-        var lines = ["\(formatInt(discharged))/\(formatInt(designCapacityMah)) mAh"]
+        var lines = ["\(Formatting.integer(discharged))/\(Formatting.integer(designCapacityMah)) mAh"]
 
         if let currentCapacityMah = viewModel.currentCapacityMah,
            let maxCapacityMah = viewModel.maxCapacityMah {
-            lines.append("\(formatInt(currentCapacityMah))/\(formatInt(maxCapacityMah)) mAh")
+            lines.append("\(Formatting.integer(currentCapacityMah))/\(Formatting.integer(maxCapacityMah)) mAh")
         }
 
         return lines
     }
 
-    private func cyclesTodayDetailLines(baseText: String) -> [String] {
-        var lines = [baseText]
+    private func cyclesTodayDetailLines() -> [String] {
+        let cyclesToday = viewModel.cyclesToday ?? 0
 
-        guard let designCapacityMah = viewModel.designCapacityMah,
-              let cyclesPerDayNeeded = viewModel.cyclesPerDayNeeded else {
-            return lines
+        guard let cyclesPerDayNeeded = viewModel.cyclesPerDayNeeded else {
+            return ["\(Formatting.integer(cyclesToday))/—"]
         }
 
         let roundedUp = Int(ceil(cyclesPerDayNeeded))
-        guard roundedUp > 0 else {
+        var lines = ["\(Formatting.integer(cyclesToday))/\(Formatting.integer(roundedUp))"]
+
+        guard let designCapacityMah = viewModel.designCapacityMah, roundedUp > 0 else {
             return lines
         }
 
@@ -273,39 +196,25 @@ struct ContentView: View {
         let usedMah = max(0, viewModel.totalMahUsedToday ?? 0)
         let remaining = targetMah - usedMah
         if remaining >= 0 {
-            lines.append("\(formatInt(Int(remaining.rounded()))) mAh Left")
+            lines.append("\(Formatting.integer(Int(remaining.rounded()))) mAh Left")
         } else {
-            lines.append("\(formatInt(Int((-remaining).rounded()))) mAh Over")
+            lines.append("\(Formatting.integer(Int((-remaining).rounded()))) mAh Over")
         }
 
         return lines
     }
 
-
-    private func timeUntilJuneFirstText() -> String {
-        var components = DateComponents()
-        components.year = 2026
-        components.month = 6
-        components.day = 1
-
-        guard let targetDate = Calendar.current.date(from: components) else {
-            return "- Days"
+    private func daysUntilDeadlineText() -> String {
+        let today = Calendar.current.startOfDay(for: Date())
+        guard let daysRemaining = BatteryGoal.daysUntilDeadline(from: today) else {
+            return "— Days"
         }
 
-        let today = Calendar.current.startOfDay(for: Date())
-        let daysRemaining = Calendar.current.dateComponents([.day], from: today, to: targetDate).day ?? 0
         if daysRemaining <= 0 {
             return "Today"
         }
 
-        let dayLabel = daysRemaining == 1 ? "Day" : "Days"
-        return "\(daysRemaining) \(dayLabel) "
-    }
-
-    private func formatInt(_ value: Int) -> String {
-        let formatter = NumberFormatter()
-        formatter.numberStyle = .decimal
-        return formatter.string(from: NSNumber(value: value)) ?? "\(value)"
+        return daysRemaining == 1 ? "1 Day" : "\(daysRemaining) Days"
     }
 }
 
@@ -324,14 +233,12 @@ private struct ProgressRingView: View {
             Text(title)
                 .font(.headline)
                 .bold()
-                .foregroundStyle(.white)
                 .lineLimit(1)
                 .minimumScaleFactor(0.8)
             if let subtitle {
                 Text(subtitle)
                     .font(.headline)
                     .bold()
-                    .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -351,11 +258,10 @@ private struct ProgressRingView: View {
                     .foregroundStyle(accent)
             }
             .frame(width: 76, height: 76)
-            ForEach(detailLines, id: \.self) { detailText in
+            ForEach(Array(detailLines.enumerated()), id: \.offset) { _, detailText in
                 Text(detailText)
                     .font(.caption)
                     .bold()
-                    .foregroundStyle(.white)
                     .lineLimit(1)
                     .minimumScaleFactor(0.8)
             }
@@ -366,4 +272,5 @@ private struct ProgressRingView: View {
 
 #Preview {
     ContentView()
+        .modelContainer(for: DailyCycle.self, inMemory: true)
 }

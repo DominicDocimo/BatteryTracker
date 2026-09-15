@@ -9,22 +9,111 @@ import Foundation
 import IOKit
 import IOKit.ps
 
-private let appleSmartBatteryService = "AppleSmartBattery"
-private let cycleCountRegistryKey = "CycleCount"
-private let currentCapacityRegistryKey = "CurrentCapacity"
-private let maxCapacityRegistryKey = "MaxCapacity"
-private let rawCurrentCapacityRegistryKey = "AppleRawCurrentCapacity"
-private let rawMaxCapacityRegistryKey = "AppleRawMaxCapacity"
-private let designCapacityRegistryKey = "DesignCapacity"
-private let nominalChargeCapacityRegistryKey = "NominalChargeCapacity"
-private let batteryHealthRegistryKey = "BatteryHealth"
-private let batteryHealthConditionRegistryKey = "BatteryHealthCondition"
-private let officialHealthPercentCacheInterval: TimeInterval = 60 * 10
-private var cachedOfficialHealthPercent: Int?
-private var lastOfficialHealthPercentFetch: Date?
+// MARK: - Battery registry snapshot
 
-private func getBatteryRegistryValue(_ key: String) -> Any? {
-    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching(appleSmartBatteryService))
+/// A single read of the AppleSmartBattery IOKit registry entry.
+///
+/// All values are captured with one service lookup instead of opening the
+/// service once per property, which matters because the app polls every 1–5 s.
+///
+/// On macOS 27 the mAh values live in the "BatteryData" sub-dictionary
+/// (RemainingCapacity/FullChargeCapacity/DesignCapacity); the top-level
+/// CurrentCapacity/MaxCapacity keys only report percentages. Older systems
+/// expose top-level AppleRawCurrentCapacity/AppleRawMaxCapacity/DesignCapacity
+/// instead, so both locations are checked.
+struct BatterySnapshot {
+    let cycleCount: Int?
+    let currentCapacityMah: Int?
+    let maxCapacityMah: Int?
+    let designCapacityMah: Int?
+    let healthText: String?
+
+    static func capture() -> BatterySnapshot {
+        let properties = batteryRegistryProperties() ?? [:]
+        let batteryData = properties["BatteryData"] as? [String: Any] ?? [:]
+
+        let capacity = capacityMah(from: properties, batteryData: batteryData)
+        let design = intValue(batteryData["DesignCapacity"]) ?? intValue(properties["DesignCapacity"])
+        return BatterySnapshot(
+            cycleCount: intValue(properties["CycleCount"]),
+            currentCapacityMah: capacity?.current,
+            maxCapacityMah: capacity?.max,
+            designCapacityMah: design,
+            healthText: healthText(from: properties, maxCapacityMah: capacity?.max, designCapacityMah: design)
+        )
+    }
+
+    private static func capacityMah(
+        from properties: [String: Any],
+        batteryData: [String: Any]
+    ) -> (current: Int, max: Int)? {
+        // macOS 27: real mAh values are in BatteryData.
+        if let remaining = intValue(batteryData["RemainingCapacity"]),
+           let fullCharge = intValue(batteryData["FullChargeCapacity"]),
+           fullCharge > 0 {
+            return (remaining, fullCharge)
+        }
+
+        // Older systems: top-level raw capacity keys.
+        if let rawCurrent = intValue(properties["AppleRawCurrentCapacity"]),
+           let rawMax = intValue(properties["AppleRawMaxCapacity"]) {
+            return (rawCurrent, rawMax)
+        }
+
+        // CurrentCapacity/MaxCapacity report percentages (0-100) on Apple
+        // silicon, so only trust them when they look like real mAh values.
+        if let current = intValue(properties["CurrentCapacity"]),
+           let max = intValue(properties["MaxCapacity"]),
+           current > 200,
+           max > 200 {
+            return (current, max)
+        }
+
+        if let current = intValue(properties["DesignCapacity"]),
+           let max = intValue(properties["MaxCapacity"]),
+           current > 200,
+           max > 200 {
+            return (current, max)
+        }
+
+        return nil
+    }
+
+    private static func healthText(
+        from properties: [String: Any],
+        maxCapacityMah: Int?,
+        designCapacityMah: Int?
+    ) -> String? {
+        if let health = stringValue(properties["BatteryHealth"]) {
+            return health
+        }
+
+        if let condition = stringValue(properties["BatteryHealthCondition"]) {
+            return condition
+        }
+
+        if let maxCapacityMah,
+           let designCapacityMah,
+           maxCapacityMah > 0,
+           designCapacityMah > 0 {
+            let percent = Int((Double(maxCapacityMah) / Double(designCapacityMah) * 100.0).rounded())
+            return "\(percent)%"
+        }
+
+        return nil
+    }
+
+    private static func stringValue(_ value: Any?) -> String? {
+        guard let string = value as? String else {
+            return nil
+        }
+        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+}
+
+private func batteryRegistryProperties() -> [String: Any]? {
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
     guard service != 0 else {
         return nil
     }
@@ -32,71 +121,24 @@ private func getBatteryRegistryValue(_ key: String) -> Any? {
         IOObjectRelease(service)
     }
 
-    return IORegistryEntryCreateCFProperty(service,
-                                          key as CFString,
-                                          kCFAllocatorDefault,
-                                          0)?.takeRetainedValue()
-}
-
-private func getBatteryRegistryInt(_ key: String) -> Int? {
-    guard let value = getBatteryRegistryValue(key) else {
+    var unmanagedProperties: Unmanaged<CFMutableDictionary>?
+    let result = IORegistryEntryCreateCFProperties(service, &unmanagedProperties, kCFAllocatorDefault, 0)
+    guard result == KERN_SUCCESS else {
         return nil
     }
 
-    if let number = value as? NSNumber {
-        return number.intValue
-    }
-
-    return value as? Int
+    return unmanagedProperties?.takeRetainedValue() as? [String: Any]
 }
 
-private func getBatteryRegistryDouble(_ key: String) -> Double? {
-    guard let value = getBatteryRegistryValue(key) else {
-        return nil
-    }
-
-    if let number = value as? NSNumber {
-        return number.doubleValue
-    }
-
-    return value as? Double
-}
-private func getBatteryRegistryString(_ key: String) -> String? {
-    guard let value = getBatteryRegistryValue(key) else {
-        return nil
-    }
-
-    if let string = value as? String {
-        let trimmed = string.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
-
-    return nil
+private func intValue(_ value: Any?) -> Int? {
+    (value as? NSNumber)?.intValue ?? (value as? Int)
 }
 
-func getBatteryCycleCount() -> Int? {
-    return getBatteryRegistryInt(cycleCountRegistryKey)
+private func doubleValue(_ value: Any?) -> Double? {
+    (value as? NSNumber)?.doubleValue ?? (value as? Double)
 }
 
-func getBatteryHealthText() -> String? {
-    if let health = getBatteryRegistryString(batteryHealthRegistryKey), !health.isEmpty {
-        return health
-    }
-
-    if let condition = getBatteryRegistryString(batteryHealthConditionRegistryKey), !condition.isEmpty {
-        return condition
-    }
-
-    if let maxCapacity = getBatteryRegistryDouble(rawMaxCapacityRegistryKey) ?? getBatteryRegistryDouble(maxCapacityRegistryKey),
-       let designCapacity = getBatteryRegistryDouble(designCapacityRegistryKey),
-       maxCapacity > 0,
-       designCapacity > 0 {
-        let percent = Int((maxCapacity / designCapacity * 100.0).rounded())
-        return "\(percent)%"
-    }
-
-    return nil
-}
+// MARK: - Power source snapshot
 
 enum PowerSourceState: String {
     case ac
@@ -104,76 +146,65 @@ enum PowerSourceState: String {
     case unknown
 }
 
-func getPowerSourceState() -> PowerSourceState {
-    guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
-        return .unknown
-    }
-    let list = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
-
-    for powerSource in list {
-        guard let description = IOPSGetPowerSourceDescription(info, powerSource)?
-            .takeUnretainedValue() as? [String: Any] else {
-            continue
-        }
-
-        if let state = description[kIOPSPowerSourceStateKey] as? String {
-            if state == kIOPSACPowerValue {
-                return .ac
-            }
-            if state == kIOPSBatteryPowerValue {
-                return .battery
-            }
-        }
-    }
-
-    return .unknown
-}
-
 struct BatteryTimeRemaining {
     let minutes: Int
     let isCharging: Bool
 }
 
-func getBatteryTimeRemaining() -> BatteryTimeRemaining? {
-    guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
-        return nil
+/// A single read of the IOPS power source list.
+///
+/// Captures state, time remaining, and health condition in one pass instead of
+/// walking the power source list three separate times per refresh.
+struct PowerSourceSnapshot {
+    let state: PowerSourceState
+    let timeRemaining: BatteryTimeRemaining?
+    let officialHealthText: String?
+
+    static func capture() -> PowerSourceSnapshot {
+        guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
+            return PowerSourceSnapshot(state: .unknown, timeRemaining: nil, officialHealthText: nil)
+        }
+        let list = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
+
+        var state: PowerSourceState = .unknown
+        var timeRemaining: BatteryTimeRemaining?
+        var officialHealthText: String?
+
+        for powerSource in list {
+            guard let description = IOPSGetPowerSourceDescription(info, powerSource)?
+                .takeUnretainedValue() as? [String: Any] else {
+                continue
+            }
+
+            if state == .unknown, let sourceState = description[kIOPSPowerSourceStateKey] as? String {
+                if sourceState == kIOPSACPowerValue {
+                    state = .ac
+                } else if sourceState == kIOPSBatteryPowerValue {
+                    state = .battery
+                }
+            }
+
+            if timeRemaining == nil {
+                let isCharging = (description[kIOPSIsChargingKey] as? Bool) ?? false
+                let timeToEmpty = description[kIOPSTimeToEmptyKey] as? Int
+                let timeToFull = description[kIOPSTimeToFullChargeKey] as? Int
+
+                if isCharging, let timeToFull, timeToFull >= 0 {
+                    timeRemaining = BatteryTimeRemaining(minutes: timeToFull, isCharging: true)
+                } else if let timeToEmpty, timeToEmpty >= 0 {
+                    timeRemaining = BatteryTimeRemaining(minutes: timeToEmpty, isCharging: false)
+                }
+            }
+
+            if officialHealthText == nil {
+                officialHealthText = healthText(from: description)
+            }
+        }
+
+        return PowerSourceSnapshot(state: state, timeRemaining: timeRemaining, officialHealthText: officialHealthText)
     }
-    let list = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
 
-    for powerSource in list {
-        guard let description = IOPSGetPowerSourceDescription(info, powerSource)?
-            .takeUnretainedValue() as? [String: Any] else {
-            continue
-        }
-
-        let isCharging = (description[kIOPSIsChargingKey] as? Bool) ?? false
-        let timeToEmpty = description[kIOPSTimeToEmptyKey] as? Int
-        let timeToFull = description[kIOPSTimeToFullChargeKey] as? Int
-
-        if isCharging, let timeToFull, timeToFull >= 0 {
-            return BatteryTimeRemaining(minutes: timeToFull, isCharging: true)
-        }
-
-        if let timeToEmpty, timeToEmpty >= 0 {
-            return BatteryTimeRemaining(minutes: timeToEmpty, isCharging: false)
-        }
-    }
-
-    return nil
-}
-
-func getOfficialBatteryHealthText() -> String? {
-    guard let info = IOPSCopyPowerSourcesInfo()?.takeRetainedValue() else {
-        return nil
-    }
-    let list = IOPSCopyPowerSourcesList(info).takeRetainedValue() as [CFTypeRef]
-
-    for powerSource in list {
-        guard let description = IOPSGetPowerSourceDescription(info, powerSource)?
-            .takeUnretainedValue() as? [String: Any] else {
-            continue
-        }
-
+    private static func healthText(from description: [String: Any]) -> String? {
         if let condition = description["BatteryHealthCondition"] as? String {
             let trimmed = condition.trimmingCharacters(in: .whitespacesAndNewlines)
             if !trimmed.isEmpty {
@@ -190,11 +221,21 @@ func getOfficialBatteryHealthText() -> String? {
                 return trimmed
             }
         }
-    }
 
-    return nil
+        return nil
+    }
 }
 
+// MARK: - Official battery health percent
+
+private let officialHealthPercentCacheInterval: TimeInterval = 60 * 10
+private var cachedOfficialHealthPercent: Int?
+private var lastOfficialHealthPercentFetch: Date?
+
+/// Returns the "Maximum Capacity" percentage that System Settings reports.
+///
+/// The system_profiler invocation is slow, so the result is cached for ten
+/// minutes and the process runs off the main actor to keep the UI responsive.
 func getOfficialBatteryHealthPercent() async -> Int? {
     if let cached = cachedOfficialHealthPercent,
        let lastFetch = lastOfficialHealthPercentFetch,
@@ -202,9 +243,10 @@ func getOfficialBatteryHealthPercent() async -> Int? {
         return cached
     }
 
-    let profilerPercent = fetchOfficialBatteryHealthPercentFromSystemProfiler()
-    let registryPercent = getOfficialBatteryHealthPercentFromRegistry()
-    let percent = profilerPercent ?? registryPercent
+    let profilerPercent = await Task.detached(priority: .utility) {
+        fetchOfficialBatteryHealthPercentFromSystemProfiler()
+    }.value
+    let percent = profilerPercent ?? officialBatteryHealthPercentFromRegistry()
 
     if profilerPercent != nil {
         cachedOfficialHealthPercent = percent
@@ -217,15 +259,29 @@ func getOfficialBatteryHealthPercent() async -> Int? {
     return percent
 }
 
-private func getOfficialBatteryHealthPercentFromRegistry() -> Int? {
-    guard let designCapacity = getBatteryRegistryDouble(designCapacityRegistryKey),
+private func officialBatteryHealthPercentFromRegistry() -> Int? {
+    let service = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceMatching("AppleSmartBattery"))
+    guard service != 0 else {
+        return nil
+    }
+    defer {
+        IOObjectRelease(service)
+    }
+
+    var unmanagedProperties: Unmanaged<CFMutableDictionary>?
+    guard IORegistryEntryCreateCFProperties(service, &unmanagedProperties, kCFAllocatorDefault, 0) == KERN_SUCCESS,
+          let properties = unmanagedProperties?.takeRetainedValue() as? [String: Any] else {
+        return nil
+    }
+
+    guard let designCapacity = (properties["DesignCapacity"] as? NSNumber)?.doubleValue,
           designCapacity > 0 else {
         return nil
     }
 
-    let maxCapacity = getBatteryRegistryDouble(nominalChargeCapacityRegistryKey)
-        ?? getBatteryRegistryDouble(rawMaxCapacityRegistryKey)
-        ?? getBatteryRegistryDouble(maxCapacityRegistryKey)
+    let maxCapacity = (properties["NominalChargeCapacity"] as? NSNumber)?.doubleValue
+        ?? (properties["AppleRawMaxCapacity"] as? NSNumber)?.doubleValue
+        ?? (properties["MaxCapacity"] as? NSNumber)?.doubleValue
 
     guard let maxCapacity, maxCapacity > 0 else {
         return nil
@@ -234,7 +290,7 @@ private func getOfficialBatteryHealthPercentFromRegistry() -> Int? {
     return Int((maxCapacity / designCapacity * 100.0).rounded())
 }
 
-private func fetchOfficialBatteryHealthPercentFromSystemProfiler() -> Int? {
+private nonisolated func fetchOfficialBatteryHealthPercentFromSystemProfiler() -> Int? {
     let process = Process()
     process.executableURL = URL(fileURLWithPath: "/usr/sbin/system_profiler")
     process.arguments = ["-detailLevel", "mini", "SPPowerDataType"]
@@ -249,13 +305,10 @@ private func fetchOfficialBatteryHealthPercentFromSystemProfiler() -> Int? {
         return nil
     }
 
-    process.waitUntilExit()
-    guard process.terminationStatus == 0 else {
-        return nil
-    }
-
     let data = outputPipe.fileHandleForReading.readDataToEndOfFile()
-    guard let output = String(data: data, encoding: .utf8) else {
+    process.waitUntilExit()
+    guard process.terminationStatus == 0,
+          let output = String(data: data, encoding: .utf8) else {
         return nil
     }
 
@@ -272,30 +325,4 @@ private func fetchOfficialBatteryHealthPercentFromSystemProfiler() -> Int? {
     }
 
     return nil
-}
-
-func getBatteryCapacityMah() -> (current: Int, max: Int)? {
-    if let rawCurrent = getBatteryRegistryInt(rawCurrentCapacityRegistryKey),
-       let rawMax = getBatteryRegistryInt(rawMaxCapacityRegistryKey) {
-        return (rawCurrent, rawMax)
-    }
-
-    if let current = getBatteryRegistryInt(currentCapacityRegistryKey),
-       let max = getBatteryRegistryInt(maxCapacityRegistryKey),
-       current > 200,
-       max > 200 {
-        return (current, max)
-    }
-
-    if let current = getBatteryRegistryInt(designCapacityRegistryKey),
-       let max = getBatteryRegistryInt(maxCapacityRegistryKey),
-       current > 200,
-       max > 200 {
-        return (current, max)
-    }
-    return nil
-}
-
-func getBatteryDesignCapacityMah() -> Int? {
-    return getBatteryRegistryInt(designCapacityRegistryKey)
 }
